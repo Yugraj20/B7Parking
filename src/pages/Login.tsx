@@ -32,12 +32,16 @@ export function AdminLogin() {
 
     try {
       await login();
-      // Redirect authentication leaves this page and returns here automatically.
+      // The popup result updates Firebase auth state; the route guard then opens the admin dashboard.
     } catch (e: any) {
       setMessage(
         e?.code === "auth/unauthorized-domain"
           ? "This site is not authorized in Firebase Authentication. Add yugraj20.github.io under Firebase Authentication → Settings → Authorized domains."
-          : (e?.message || "Sign-in failed.")
+          : e?.code === "auth/popup-blocked"
+            ? "Google sign-in popup was blocked. Allow popups for yugraj20.github.io and try again."
+            : e?.code === "auth/popup-closed-by-user"
+              ? "Sign-in cancelled."
+              : (e?.message || "Sign-in failed.")
       );
       setBusy(false);
     }
@@ -61,7 +65,7 @@ export function AdminLogin() {
           </div>
           <button className="primary-btn wide" onClick={go} disabled={busy || !authReady}>
             <Chrome size={17}/>
-            {busy ? "Redirecting to Google…" : "Continue with Google"}
+            {busy ? "Opening Google…" : "Continue with Google"}
           </button>
           <div className="login-note">
             Authorised administrator: <strong>{ADMIN_EMAIL}</strong>
