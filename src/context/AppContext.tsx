@@ -13,7 +13,7 @@ const empty: AppData = {
 type Ctx = {
   data: AppData; loading: boolean; error: string | null;
   user: User | null; isAdmin: boolean;
-  login: () => Promise<void>; logout: () => Promise<void>;
+  login: () => Promise<User>; logout: () => Promise<void>;
 };
 
 const AppCtx = createContext<Ctx | null>(null);
@@ -39,7 +39,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value = useMemo<Ctx>(() => ({
     data, loading, error, user,
     isAdmin: user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase(),
-    login: async () => { await signInWithPopup(auth, googleProvider); },
+    login: async () => {
+      const result = await signInWithPopup(auth, googleProvider);
+      return result.user;
+    },
     logout: async () => { await signOut(auth); }
   }), [data, loading, error, user]);
 

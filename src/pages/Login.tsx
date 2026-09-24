@@ -15,8 +15,18 @@ export function AdminLogin() {
   const go = async () => {
     setBusy(true); setMessage("");
     try {
-      await login();
-      navigate("/admin/overview");
+      const signedInUser = await login();
+      const signedInEmail = signedInUser.email?.trim().toLowerCase();
+      const adminEmail = ADMIN_EMAIL.trim().toLowerCase();
+
+      if (!signedInEmail || signedInEmail !== adminEmail) {
+        setMessage(`This Google account is not authorized for admin access. Signed in as: ${signedInUser.email || "unknown account"}`);
+        return;
+      }
+
+      // Auth state is updated asynchronously. Navigate only after the popup
+      // has returned an explicitly verified administrator account.
+      navigate("/admin/overview", { replace: true });
     } catch (e:any) {
       setMessage(e?.code === "auth/popup-closed-by-user" ? "Sign-in cancelled." : (e?.message || "Sign-in failed."));
     } finally { setBusy(false); }
