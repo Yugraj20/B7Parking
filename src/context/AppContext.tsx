@@ -1,10 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import {
-  onAuthStateChanged,
-  signInWithPopup,
-  signOut,
-  type User
-} from "firebase/auth";
+import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
 import { auth, ADMIN_EMAIL, googleProvider } from "../lib/firebase";
 import { subscribePublic, subscribeAdmin } from "../lib/firestore";
 import type { AppData } from "../types";
@@ -12,18 +7,13 @@ import type { AppData } from "../types";
 const empty: AppData = {
   residents: [], flats: [], categories: [], expenses: [], payments: [],
   recurringExpenses: [], activityLogs: [],
-  settings: { currency: "INR", propertyName: "ParkLedger", monthStartDay: 1 }
+  settings: { currency:"INR", propertyName:"ParkLedger", monthStartDay:1 }
 };
 
 type Ctx = {
-  data: AppData;
-  loading: boolean;
-  error: string | null;
-  user: User | null;
-  authReady: boolean;
-  isAdmin: boolean;
-  login: () => Promise<void>;
-  logout: () => Promise<void>;
+  data: AppData; loading: boolean; error: string | null;
+  user: User | null; isAdmin: boolean;
+  login: () => Promise<User>; logout: () => Promise<void>;
 };
 
 const AppCtx = createContext<Ctx | null>(null);
@@ -31,58 +21,30 @@ const AppCtx = createContext<Ctx | null>(null);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<AppData>(empty);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
+  const [error, setError] = useState<string|null>(null);
+  const [user, setUser] = useState<User|null>(null);
 
-  useEffect(() => {
-    let active = true;
-
-    const unsubscribe = onAuthStateChanged(auth, u => {
-      if (!active) return;
-      setUser(u);
-      setAuthReady(true);
-    });
-
-
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, []);
+  useEffect(() => onAuthStateChanged(auth, u => setUser(u)), []);
 
   useEffect(() => {
     setLoading(true);
     setError(null);
-
-    const isCurrentAdmin =
-      user?.email?.trim().toLowerCase() === ADMIN_EMAIL.trim().toLowerCase();
-
-    const unsub = isCurrentAdmin
+    const unsub = (user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase())
       ? subscribeAdmin(setData, e => setError(e.message))
       : subscribePublic(setData, e => setError(e.message));
-
     const timer = window.setTimeout(() => setLoading(false), 450);
-    return () => {
-      unsub();
-      clearTimeout(timer);
-    };
+    return () => { unsub(); clearTimeout(timer); };
   }, [user]);
 
   const value = useMemo<Ctx>(() => ({
-    data,
-    loading,
-    error,
-    user,
-    authReady,
-    isAdmin: user?.email?.trim().toLowerCase() === ADMIN_EMAIL.trim().toLowerCase(),
+    data, loading, error, user,
+    isAdmin: user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase(),
     login: async () => {
-      await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      return result.user;
     },
-    logout: async () => {
-      await signOut(auth);
-    }
-  }), [data, loading, error, user, authReady]);
+    logout: async () => { await signOut(auth); }
+  }), [data, loading, error, user]);
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
 }

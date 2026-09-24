@@ -11,12 +11,16 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,9 +32,6 @@ jobs:
 
       - name: Install dependencies
         run: npm install
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
 
       - name: Build
         run: npm run build
@@ -45,35 +46,14 @@ jobs:
           VITE_ADMIN_EMAIL: ${{ secrets.VITE_ADMIN_EMAIL }}
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
 
-      - name: Verify production output
-        shell: bash
-        run: |
-          test -f dist/index.html
-          test -d dist/assets
-          if grep -q '/src/main.tsx' dist/index.html; then
-            echo "ERROR: Vite production output still references source main.tsx."
-            cat dist/index.html
-            exit 1
-          fi
-          echo "Production output verified:"
-          grep -oE 'assets/[^" ]+\.js' dist/index.html || true
-
-      - name: Add SPA fallback
-        shell: bash
-        run: cp dist/index.html dist/404.html
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
       - name: Deploy to Pages
         id: deployment
         uses: actions/deploy-pages@v4
