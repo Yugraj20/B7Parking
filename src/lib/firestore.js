@@ -28,19 +28,40 @@ export function subscribePublic(onData, onError) {
         listen("categories", v => { state.categories = v; onData({ ...state }); }),
         listen("expenses", v => { state.expenses = v; onData({ ...state }); }),
         listen("payments", v => { state.payments = v; onData({ ...state }); }),
-        listen("recurringExpenses", v => { state.recurringExpenses = v; onData({ ...state }); }),
-        listen("activityLogs", v => { state.activityLogs = v; onData({ ...state }); }),
         onSnapshot(doc(db, "settings", "global"), snap => {
             if (snap.exists())
                 state.settings = snap.data();
             onData({ ...state });
         }, onError)
     ];
-    unsubs.forEach(u => u);
     return () => unsubs.forEach(u => u());
 }
 export function subscribeAdmin(onData, onError) {
-    return subscribePublic(onData, onError);
+    const state = {
+        residents: [], flats: [], categories: [], expenses: [], payments: [],
+        recurringExpenses: [], activityLogs: [], settings: {
+            currency: "INR", propertyName: "ParkLedger", monthStartDay: 1
+        }
+    };
+    const set = (key, value) => {
+        state[key] = value;
+        onData({ ...state });
+    };
+    const unsubs = [
+        listen("residents", v => set("residents", v)),
+        listen("flats", v => set("flats", v)),
+        listen("categories", v => set("categories", v)),
+        listen("expenses", v => set("expenses", v)),
+        listen("payments", v => set("payments", v)),
+        listen("recurringExpenses", v => set("recurringExpenses", v)),
+        listen("activityLogs", v => set("activityLogs", v)),
+        onSnapshot(doc(db, "settings", "global"), snap => {
+            if (snap.exists())
+                state.settings = snap.data();
+            onData({ ...state });
+        }, onError)
+    ];
+    return () => unsubs.forEach(u => u());
 }
 export async function saveDoc(collectionName, id, data) {
     const clean = { ...data, updatedAt: serverTimestamp() };
