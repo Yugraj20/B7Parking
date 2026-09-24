@@ -10,7 +10,8 @@ import { StatusBadge } from "../components/StatusBadge";
 import { MonthlyBar, CategoryDonut } from "../components/Charts";
 
 export function PublicDashboard({ section="overview" }: { section?: string }) {
-  const { data, login, error } = useApp();
+  const { data, error } = useApp();
+  const goToAdmin = () => window.location.assign(`${import.meta.env.BASE_URL}admin.html#/login`);
   const navigate = useNavigate();
   const [month, setMonth] = useState(currentMonth());
   const [query, setQuery] = useState("");
@@ -92,7 +93,7 @@ export function PublicDashboard({ section="overview" }: { section?: string }) {
     <>
       <div className="page-header">
         <div><div className="eyebrow">Shared parking ledger</div><h1>Know what the lot costs.</h1><p>Transparent, read-only figures for residents and stakeholders.</p></div>
-        <div className="header-actions"><div className="header-actions"><button className="secondary-btn" onClick={exportCsv}><Download size={16}/> CSV</button><button className="secondary-btn" onClick={exportXlsx}>Excel</button><button className="secondary-btn" onClick={exportPdf}>PDF</button></div><button className="primary-btn" onClick={login}>Admin access <ArrowUpRight size={16}/></button></div>
+        <div className="header-actions"><div className="header-actions"><button className="secondary-btn" onClick={exportCsv}><Download size={16}/> CSV</button><button className="secondary-btn" onClick={exportXlsx}>Excel</button><button className="secondary-btn" onClick={exportPdf}>PDF</button></div><button className="primary-btn" onClick={goToAdmin}>Admin access <ArrowUpRight size={16}/></button></div>
       </div>
       {error && <div className="notice error"><strong>Live data unavailable.</strong> {error}</div>}
       {section==="overview" && <>

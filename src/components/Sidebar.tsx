@@ -43,7 +43,7 @@ export function Sidebar({ admin = false }: { admin?: boolean }) {
       </div>
       <nav className="nav-list" aria-label={admin ? "Admin navigation" : "Dashboard navigation"}>
         {items.map(([path, label, Icon]) => (
-          <NavLink key={path} to={admin ? `/admin/${path}` : `/${path}`} className={({isActive}) => `nav-link ${isActive ? "active" : ""}`}>
+          <NavLink key={path} to={`/${path}`} className={({isActive}) => `nav-link ${isActive ? "active" : ""}`}>
             <Icon size={17} />
             <span>{label}</span>
           </NavLink>
@@ -62,7 +62,7 @@ export function MobileNav({ admin = false }: { admin?: boolean }) {
   return (
     <nav className="mobile-nav">
       {items.map(([path, label, Icon]) => (
-        <NavLink key={path} to={admin ? `/admin/${path}` : `/${path}`} className={({isActive}) => `mobile-nav-link ${isActive ? "active" : ""}`}>
+        <NavLink key={path} to={`/${path}`} className={({isActive}) => `mobile-nav-link ${isActive ? "active" : ""}`}>
           <Icon size={18} />
           <span>{label}</span>
         </NavLink>

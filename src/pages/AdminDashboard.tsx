@@ -17,7 +17,7 @@ export function AdminDashboard({ section="overview" }: { section?: string }) {
   const [modal,setModal]=useState<string|null>(null);
   const [saving,setSaving]=useState(false);
   const [toast,setToast]=useState("");
-  if (!user || !isAdmin) return <Navigate to="/admin/login" replace/>;
+  if (!user || !isAdmin) return <Navigate to="/login" replace/>;
 
   const residentMap = new Map(data.residents.map(r=>[r.id,r]));
   const categoryMap = new Map(data.categories.map(c=>[c.id,c.name]));
