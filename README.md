@@ -108,3 +108,60 @@ This protects against repeated button presses and stale last-generated metadata.
 The public dashboard is deliberately view-only. No public UI writes to Firestore. Admin-only actions are routed through the protected console and Firestore rules.
 
 The source includes the original Firebase project configuration as environment variables only, rather than embedding it in application logic.
+
+## GitHub Pages deployment
+
+This repository includes `.github/workflows/deploy.yml`.
+
+### 1. Push the project
+
+Create a GitHub repository and push the project to the `main` branch.
+
+### 2. Add GitHub Actions secrets
+
+Repository → Settings → Secrets and variables → Actions → New repository secret.
+
+Add:
+
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_STORAGE_BUCKET`
+- `VITE_FIREBASE_MESSAGING_SENDER_ID`
+- `VITE_FIREBASE_APP_ID`
+- `VITE_FIREBASE_MEASUREMENT_ID`
+- `VITE_ADMIN_EMAIL`
+
+The Firebase web configuration is intended for client-side use. Never add a Firebase service-account private key.
+
+### 3. Enable GitHub Pages
+
+Repository → Settings → Pages → Build and deployment → Source: **GitHub Actions**.
+
+The workflow automatically builds and publishes `dist/` whenever `main` changes.
+
+### 4. GitHub Pages URL
+
+For a project repository, the normal URL is:
+
+`https://YOUR_USERNAME.github.io/YOUR_REPOSITORY/`
+
+If the repository is a user/organization Pages repository or you use a custom domain, set `VITE_BASE_PATH` appropriately.
+
+### 5. Firebase authorized domains
+
+Firebase Console → Authentication → Settings → Authorized domains.
+
+Add the GitHub Pages hostname used by the deployed app, for example:
+
+`YOUR_USERNAME.github.io`
+
+Google Authentication will otherwise reject the deployed origin.
+
+### 6. Firestore rules
+
+Deploy `firestore.rules` to the Firebase project. Do not weaken the administrator write rule merely to make the frontend work.
+
+### 7. Important GitHub Pages note
+
+The application uses client-side React routing. `public/404.html` is included as a fallback for direct route loads. If your repository is hosted below a path, keep `VITE_BASE_PATH` aligned with that repository path.

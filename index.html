@@ -9,6 +9,19 @@
     <title>ParkLedger</title>
   </head>
   <body>
+    <script>
+(function () {
+  var redirect = sessionStorage.redirect;
+  delete sessionStorage.redirect;
+  if (redirect && redirect !== location.href) {
+    var target = new URL(redirect);
+    if (target.origin === location.origin) {
+      history.replaceState(null, "", target.pathname + target.search + target.hash);
+    }
+  }
+})();
+</script>
+
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
