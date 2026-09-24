@@ -1,8 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  getRedirectResult,
   onAuthStateChanged,
-  signInWithRedirect,
+  signInWithPopup,
   signOut,
   type User
 } from "firebase/auth";
@@ -45,11 +44,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setAuthReady(true);
     });
 
-    getRedirectResult(auth).catch(e => {
-      if (!active) return;
-      setError(e?.message || "Google sign-in failed.");
-      setAuthReady(true);
-    });
 
     return () => {
       active = false;
@@ -83,7 +77,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     authReady,
     isAdmin: user?.email?.trim().toLowerCase() === ADMIN_EMAIL.trim().toLowerCase(),
     login: async () => {
-      await signInWithRedirect(auth, googleProvider);
+      await signInWithPopup(auth, googleProvider);
     },
     logout: async () => {
       await signOut(auth);
