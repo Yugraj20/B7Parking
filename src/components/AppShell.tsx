@@ -1,0 +1,40 @@
+import { LogIn, ShieldCheck } from "lucide-react";
+import { Sidebar, MobileNav } from "./Sidebar";
+import { ThemeToggle } from "./ThemeToggle";
+import type { ReactNode } from "react";
+
+export function AppShell({
+  children, admin, theme, onTheme, userEmail, onLogin, onLogout
+}: {
+  children: ReactNode; admin?: boolean; theme: "light" | "dark"; onTheme: (v: "light"|"dark") => void;
+  userEmail?: string | null; onLogin?: () => void; onLogout?: () => void;
+}) {
+  return (
+    <div className={`app-shell ${admin ? "admin-shell" : ""}`}>
+      <Sidebar admin={admin} />
+      <div className="main-wrap">
+        <header className="topbar">
+          <div className="topbar-title">
+            <div className="eyebrow">{admin ? "Administration" : "Parking & property ledger"}</div>
+            <div className="page-context">{admin ? "Control centre" : "Public view"}</div>
+          </div>
+          <div className="topbar-actions">
+            <span className="read-only-pill"><span className="live-dot" /> {admin ? "Protected" : "View only"}</span>
+            <ThemeToggle theme={theme} onChange={onTheme} />
+            {admin ? (
+              <button className="user-chip" onClick={onLogout} title="Sign out">
+                <ShieldCheck size={16} /><span>{userEmail || "Admin"}</span>
+              </button>
+            ) : (
+              <button className="secondary-btn compact" onClick={onLogin}>
+                <LogIn size={15} /> Admin
+              </button>
+            )}
+          </div>
+        </header>
+        <main className="page">{children}</main>
+      </div>
+      <MobileNav admin={admin} />
+    </div>
+  );
+}

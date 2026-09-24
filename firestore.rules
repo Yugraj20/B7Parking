@@ -1,0 +1,48 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.token.email == "yugrajsekhon20@gmail.com"
+        && request.auth.token.email_verified == true;
+    }
+
+    // Public dashboard collections contain only information intended for the read-only ledger.
+    match /residents/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /flats/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /categories/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /expenses/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /payments/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /recurringExpenses/{id} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+    match /activityLogs/{id} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /users/{uid} {
+      allow read, write: if isAdmin() && request.auth.uid == uid;
+    }
+  }
+}

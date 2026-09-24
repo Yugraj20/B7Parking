@@ -1,0 +1,15 @@
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, CartesianGrid } from "recharts";
+
+const palette = ["#315c4d","#b7833f","#8b5e55","#526b7a","#8b8d74","#6b4f5f"];
+
+export function MonthlyBar({ data }: { data: {month:string; amount:number}[] }) {
+  return <div className="chart"><ResponsiveContainer width="100%" height={260}><BarChart data={data} margin={{top:8,right:10,left:-18,bottom:0}}><CartesianGrid vertical={false} stroke="var(--line)" /><XAxis dataKey="month" stroke="var(--muted)" tickLine={false} axisLine={false} /><YAxis stroke="var(--muted)" tickLine={false} axisLine={false} tickFormatter={v => `₹${Math.round(v/1000)}k`} /><Tooltip formatter={(v) => [`₹${Number(v).toLocaleString("en-IN")}`, "Spent"]} contentStyle={{background:"var(--surface-strong)",border:"1px solid var(--line)",borderRadius:8,color:"var(--text)"}} /><Bar dataKey="amount" fill="var(--accent)" radius={[3,3,0,0]} /></BarChart></ResponsiveContainer></div>;
+}
+
+export function CategoryDonut({ data }: { data: {name:string; amount:number}[] }) {
+  return <div className="chart chart-donut"><ResponsiveContainer width="100%" height={260}><PieChart><Pie data={data} dataKey="amount" nameKey="name" innerRadius={68} outerRadius={92} paddingAngle={2}>{data.map((_,i)=><Cell key={i} fill={palette[i%palette.length]} />)}</Pie><Tooltip formatter={(v) => [`₹${Number(v).toLocaleString("en-IN")}`, "Spend"]} contentStyle={{background:"var(--surface-strong)",border:"1px solid var(--line)",borderRadius:8,color:"var(--text)"}} /></PieChart></ResponsiveContainer></div>;
+}
+
+export function TrendArea({ data }: { data: {month:string; amount:number}[] }) {
+  return <div className="chart"><ResponsiveContainer width="100%" height={260}><AreaChart data={data} margin={{top:8,right:10,left:-18,bottom:0}}><defs><linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity={0.28}/><stop offset="100%" stopColor="var(--accent)" stopOpacity={0}/></linearGradient></defs><CartesianGrid vertical={false} stroke="var(--line)" /><XAxis dataKey="month" stroke="var(--muted)" tickLine={false} axisLine={false}/><YAxis stroke="var(--muted)" tickLine={false} axisLine={false} tickFormatter={v=>`₹${Math.round(v/1000)}k`}/><Tooltip formatter={(v)=>[`₹${Number(v).toLocaleString("en-IN")}`,"Spend"]} contentStyle={{background:"var(--surface-strong)",border:"1px solid var(--line)",borderRadius:8,color:"var(--text)"}}/><Area type="monotone" dataKey="amount" stroke="var(--accent)" strokeWidth={2} fill="url(#areaFill)" /></AreaChart></ResponsiveContainer></div>;
+}

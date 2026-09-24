@@ -1,0 +1,7 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { LogIn, ShieldCheck } from "lucide-react";
+import { Sidebar, MobileNav } from "./Sidebar";
+import { ThemeToggle } from "./ThemeToggle";
+export function AppShell({ children, admin, theme, onTheme, userEmail, onLogin, onLogout }) {
+    return (_jsxs("div", { className: `app-shell ${admin ? "admin-shell" : ""}`, children: [_jsx(Sidebar, { admin: admin }), _jsxs("div", { className: "main-wrap", children: [_jsxs("header", { className: "topbar", children: [_jsxs("div", { className: "topbar-title", children: [_jsx("div", { className: "eyebrow", children: admin ? "Administration" : "Parking & property ledger" }), _jsx("div", { className: "page-context", children: admin ? "Control centre" : "Public view" })] }), _jsxs("div", { className: "topbar-actions", children: [_jsxs("span", { className: "read-only-pill", children: [_jsx("span", { className: "live-dot" }), " ", admin ? "Protected" : "View only"] }), _jsx(ThemeToggle, { theme: theme, onChange: onTheme }), admin ? (_jsxs("button", { className: "user-chip", onClick: onLogout, title: "Sign out", children: [_jsx(ShieldCheck, { size: 16 }), _jsx("span", { children: userEmail || "Admin" })] })) : (_jsxs("button", { className: "secondary-btn compact", onClick: onLogin, children: [_jsx(LogIn, { size: 15 }), " Admin"] }))] })] }), _jsx("main", { className: "page", children: children })] }), _jsx(MobileNav, { admin: admin })] }));
+}
