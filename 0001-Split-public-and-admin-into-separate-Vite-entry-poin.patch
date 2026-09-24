@@ -1,0 +1,1217 @@
+From 9e8d2b18807f0bed001a44f698edbe4e2cbee73f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 16:14:56 +0000
+Subject: [PATCH] Split public and admin into separate Vite entry points
+ (admin.html#/login)
+
+- Add admin.html + src/admin-main.tsx + AdminApp (HashRouter) for GitHub Pages
+- Public app no longer contains admin routes; Admin buttons navigate to admin.html#/login
+- Remove tsc-emitted stale src/**/*.js that Vite resolved ahead of .tsx; set noEmit
+- Vite multi-page build config; CI verifies dist/index.html, dist/admin.html, assets, base path
+- Friendly Firebase auth error messages
+---
+ .github/workflows/deploy.yml  |  10 +++
+ .gitignore                    |   4 ++
+ admin.html                    |  15 ++++
+ src/AdminApp.tsx              |  45 ++++++++++++
+ src/App.js                    |  34 ---------
+ src/App.tsx                   |  59 +++++++--------
+ src/admin-main.tsx            |   8 +++
+ src/components/AppShell.js    |   7 --
+ src/components/Charts.js      |  12 ----
+ src/components/Metric.js      |   4 --
+ src/components/Modal.js       |   8 ---
+ src/components/Sidebar.js     |  34 ---------
+ src/components/Sidebar.tsx    |   4 +-
+ src/components/StatusBadge.js |   5 --
+ src/components/ThemeToggle.js |   5 --
+ src/context/AppContext.js     |  40 -----------
+ src/context/ThemeContext.tsx  |  12 ++++
+ src/lib/backup.js             |  59 ---------------
+ src/lib/firebase.js           |  20 ------
+ src/lib/firestore.js          |  96 -------------------------
+ src/lib/utils.js              |  87 ----------------------
+ src/main.js                   |   6 --
+ src/pages/AdminDashboard.js   | 131 ----------------------------------
+ src/pages/AdminDashboard.tsx  |   2 +-
+ src/pages/Login.js            |  30 --------
+ src/pages/Login.tsx           |  18 +++--
+ src/pages/PublicDashboard.js  | 110 ----------------------------
+ src/pages/PublicDashboard.tsx |   5 +-
+ src/types.js                  |   1 -
+ tsconfig.app.json             |   1 +
+ vite.config.ts                |  13 +++-
+ 31 files changed, 154 insertions(+), 731 deletions(-)
+ create mode 100644 .gitignore
+ create mode 100644 admin.html
+ create mode 100644 src/AdminApp.tsx
+ delete mode 100644 src/App.js
+ create mode 100644 src/admin-main.tsx
+ delete mode 100644 src/components/AppShell.js
+ delete mode 100644 src/components/Charts.js
+ delete mode 100644 src/components/Metric.js
+ delete mode 100644 src/components/Modal.js
+ delete mode 100644 src/components/Sidebar.js
+ delete mode 100644 src/components/StatusBadge.js
+ delete mode 100644 src/components/ThemeToggle.js
+ delete mode 100644 src/context/AppContext.js
+ create mode 100644 src/context/ThemeContext.tsx
+ delete mode 100644 src/lib/backup.js
+ delete mode 100644 src/lib/firebase.js
+ delete mode 100644 src/lib/firestore.js
+ delete mode 100644 src/lib/utils.js
+ delete mode 100644 src/main.js
+ delete mode 100644 src/pages/AdminDashboard.js
+ delete mode 100644 src/pages/Login.js
+ delete mode 100644 src/pages/PublicDashboard.js
+ delete mode 100644 src/types.js
+
+diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
+index 011ae20..cf006f5 100644
+--- a/.github/workflows/deploy.yml
++++ b/.github/workflows/deploy.yml
+@@ -46,6 +46,16 @@ jobs:
+           VITE_ADMIN_EMAIL: ${{ secrets.VITE_ADMIN_EMAIL }}
+           VITE_BASE_PATH: /${{ github.event.repository.name }}/
+ 
++      - name: Verify production entry points
++        run: |
++          test -f dist/index.html || { echo "dist/index.html missing"; exit 1; }
++          test -f dist/admin.html || { echo "dist/admin.html missing"; exit 1; }
++          test -d dist/assets || { echo "dist/assets missing"; exit 1; }
++          if grep -q "/src/main.tsx" dist/index.html; then echo "index.html references source entry"; exit 1; fi
++          if grep -q "/src/admin-main.tsx" dist/admin.html; then echo "admin.html references source entry"; exit 1; fi
++          grep -q "/${{ github.event.repository.name }}/assets/" dist/index.html || { echo "index.html asset base path wrong"; exit 1; }
++          grep -q "/${{ github.event.repository.name }}/assets/" dist/admin.html || { echo "admin.html asset base path wrong"; exit 1; }
++
+       - name: Configure Pages
+         uses: actions/configure-pages@v5
+ 
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..dafa699
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,4 @@
++node_modules/
++dist/
++.env
++.env.local
+diff --git a/admin.html b/admin.html
+new file mode 100644
+index 0000000..7eae9ca
+--- /dev/null
++++ b/admin.html
+@@ -0,0 +1,15 @@
++<!doctype html>
++<html lang="en">
++  <head>
++    <meta charset="UTF-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
++    <meta name="theme-color" content="#e9e4da" />
++    <meta name="robots" content="noindex" />
++    <link rel="icon" href="/favicon.svg" />
++    <title>ParkLedger Admin</title>
++  </head>
++  <body>
++    <div id="root"></div>
++    <script type="module" src="/src/admin-main.tsx"></script>
++  </body>
++</html>
+diff --git a/src/AdminApp.tsx b/src/AdminApp.tsx
+new file mode 100644
+index 0000000..f865afb
+--- /dev/null
++++ b/src/AdminApp.tsx
+@@ -0,0 +1,45 @@
++import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
++import { AppProvider, useApp } from "./context/AppContext";
++import { ThemeHost, useTheme } from "./context/ThemeContext";
++import { AppShell } from "./components/AppShell";
++import { AdminDashboard } from "./pages/AdminDashboard";
++import { AdminLogin } from "./pages/Login";
++
++const SECTIONS = ["overview", "expenses", "payments", "residents", "flats", "charges", "categories", "recurring", "reports", "activity", "settings"];
++
++function AdminRoute({ section }: { section: string }) {
++  const { user, isAdmin, logout } = useApp();
++  const { theme, setTheme } = useTheme();
++  if (!user || !isAdmin) return <Navigate to="/login" replace />;
++  return <AppShell admin theme={theme} onTheme={setTheme} userEmail={user.email} onLogout={logout}><AdminDashboard section={section} /></AppShell>;
++}
++
++function LoginRoute() {
++  const { theme, setTheme } = useTheme();
++  return (
++    <div className="login-root">
++      <div className="login-theme">
++        <button className="icon-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? "☼" : "☾"}</button>
++      </div>
++      <AdminLogin />
++    </div>
++  );
++}
++
++// HashRouter: GitHub Pages cannot rewrite /admin/* paths, so admin routes live
++// after the hash (admin.html#/login, admin.html#/overview, ...).
++export default function AdminApp() {
++  return (
++    <HashRouter>
++      <AppProvider>
++        <ThemeHost>
++          <Routes>
++            <Route path="/login" element={<LoginRoute />} />
++            {SECTIONS.map(x => <Route key={x} path={`/${x}`} element={<AdminRoute section={x} />} />)}
++            <Route path="*" element={<Navigate to="/login" replace />} />
++          </Routes>
++        </ThemeHost>
++      </AppProvider>
++    </HashRouter>
++  );
++}
+diff --git a/src/App.js b/src/App.js
+deleted file mode 100644
+index bba4e87..0000000
+--- a/src/App.js
++++ /dev/null
+@@ -1,34 +0,0 @@
+-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+-import { AppProvider, useApp } from "./context/AppContext";
+-import { AppShell } from "./components/AppShell";
+-import { PublicDashboard } from "./pages/PublicDashboard";
+-import { AdminDashboard } from "./pages/AdminDashboard";
+-import { AdminLogin } from "./pages/Login";
+-import { useEffect, useState } from "react";
+-function ThemeHost({ children }) {
+-    const [theme, setTheme] = useState(() => localStorage.getItem("parkledger-theme") === "dark" ? "dark" : "light");
+-    useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("parkledger-theme", theme); }, [theme]);
+-    return _jsx(ThemeContext.Provider, { value: { theme, setTheme }, children: children });
+-}
+-import { createContext, useContext } from "react";
+-const ThemeContext = createContext({ theme: "light", setTheme: () => { } });
+-const useTheme = () => useContext(ThemeContext);
+-function PublicRoute({ section }) {
+-    const { login } = useApp();
+-    const { theme, setTheme } = useTheme();
+-    return _jsx(AppShell, { theme: theme, onTheme: setTheme, onLogin: login, children: _jsx(PublicDashboard, { section: section }) });
+-}
+-function AdminRoute({ section }) {
+-    const { user, isAdmin, logout } = useApp();
+-    const { theme, setTheme } = useTheme();
+-    if (!user || !isAdmin)
+-        return _jsx(Navigate, { to: "/admin/login", replace: true });
+-    return _jsx(AppShell, { admin: true, theme: theme, onTheme: setTheme, userEmail: user.email, onLogout: logout, children: _jsx(AdminDashboard, { section: section }) });
+-}
+-function LoginRoute() { const { theme, setTheme } = useTheme(); return _jsx(AdminLoginWithTheme, { theme: theme, onTheme: setTheme }); }
+-function AdminLoginWithTheme({ theme, onTheme }) { return _jsxs("div", { className: "login-root", children: [_jsx("div", { className: "login-theme", children: _jsx("button", { className: "icon-btn", onClick: () => onTheme(theme === "dark" ? "light" : "dark"), children: theme === "dark" ? "☼" : "☾" }) }), _jsx(AdminLogin, {})] }); }
+-export default function App() {
+-    const basename = import.meta.env.BASE_URL.replace(/\/$/, "") || undefined;
+-    return _jsx(BrowserRouter, { basename: basename, children: _jsx(AppProvider, { children: _jsx(ThemeHost, { children: _jsxs(Routes, { children: [_jsx(Route, { path: "/", element: _jsx(PublicRoute, { section: "overview" }) }), ["dues", "expenses", "payments", "balances", "history", "analytics", "reports"].map(x => _jsx(Route, { path: `/${x}`, element: _jsx(PublicRoute, { section: x }) }, x)), _jsx(Route, { path: "/admin/login", element: _jsx(LoginRoute, {}) }), ["overview", "expenses", "payments", "residents", "flats", "charges", "categories", "recurring", "reports", "activity", "settings"].map(x => _jsx(Route, { path: `/admin/${x}`, element: _jsx(AdminRoute, { section: x }) }, x)), _jsx(Route, { path: "*", element: _jsx(Navigate, { to: "/", replace: true }) })] }) }) }) });
+-}
+diff --git a/src/App.tsx b/src/App.tsx
+index cbf15b8..eedd99d 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,39 +1,34 @@
+ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+-import { AppProvider, useApp } from "./context/AppContext";
++import { AppProvider } from "./context/AppContext";
++import { ThemeHost, useTheme } from "./context/ThemeContext";
+ import { AppShell } from "./components/AppShell";
+ import { PublicDashboard } from "./pages/PublicDashboard";
+-import { AdminDashboard } from "./pages/AdminDashboard";
+-import { AdminLogin } from "./pages/Login";
+-import { useEffect, useState } from "react";
+ 
+-function ThemeHost({children}:{children:ReactNode}) {
+-  const [theme,setTheme]=useState<"light"|"dark">(()=>localStorage.getItem("parkledger-theme")==="dark"?"dark":"light");
+-  useEffect(()=>{document.documentElement.dataset.theme=theme;localStorage.setItem("parkledger-theme",theme)},[theme]);
+-  return <ThemeContext.Provider value={{theme,setTheme}}>{children}</ThemeContext.Provider>;
+-}
+-import { createContext, useContext, type ReactNode } from "react";
+-const ThemeContext=createContext<{theme:"light"|"dark";setTheme:(v:"light"|"dark")=>void}>({theme:"light",setTheme:()=>{}});
+-const useTheme=()=>useContext(ThemeContext);
++// The admin panel is a separate application (admin.html). GitHub Pages is
++// static hosting, so the Admin button performs a real page navigation.
++const ADMIN_URL = `${import.meta.env.BASE_URL}admin.html#/login`;
++const goToAdmin = () => window.location.assign(ADMIN_URL);
+ 
+-function PublicRoute({section}:{section:string}) {
+-  const {login}=useApp(); const {theme,setTheme}=useTheme();
+-  return <AppShell theme={theme} onTheme={setTheme} onLogin={login}><PublicDashboard section={section}/></AppShell>;
+-}
+-function AdminRoute({section}:{section:string}) {
+-  const {user,isAdmin,logout}=useApp(); const {theme,setTheme}=useTheme();
+-  if(!user || !isAdmin) return <Navigate to="/admin/login" replace/>;
+-  return <AppShell admin theme={theme} onTheme={setTheme} userEmail={user.email} onLogout={logout}><AdminDashboard section={section}/></AppShell>;
++function PublicRoute({ section }: { section: string }) {
++  const { theme, setTheme } = useTheme();
++  return <AppShell theme={theme} onTheme={setTheme} onLogin={goToAdmin}><PublicDashboard section={section} /></AppShell>;
+ }
+-function LoginRoute(){const {theme,setTheme}=useTheme(); return <AdminLoginWithTheme theme={theme} onTheme={setTheme}/>;}
+-function AdminLoginWithTheme({theme,onTheme}:{theme:"light"|"dark";onTheme:(v:"light"|"dark")=>void}){return <div className="login-root"><div className="login-theme"><button className="icon-btn" onClick={()=>onTheme(theme==="dark"?"light":"dark")}>{theme==="dark"?"☼":"☾"}</button></div><AdminLogin/></div>}
+ 
+-export default function App(){
+- const basename = import.meta.env.BASE_URL.replace(/\/$/, "") || undefined;
+- return <BrowserRouter basename={basename}><AppProvider><ThemeHost><Routes>
+-   <Route path="/" element={<PublicRoute section="overview"/>}/>
+-   {["dues","expenses","payments","balances","history","analytics","reports"].map(x=><Route key={x} path={`/${x}`} element={<PublicRoute section={x}/>}/>)}
+-   <Route path="/admin/login" element={<LoginRoute/>}/>
+-   {["overview","expenses","payments","residents","flats","charges","categories","recurring","reports","activity","settings"].map(x=><Route key={x} path={`/admin/${x}`} element={<AdminRoute section={x}/>}/>)}
+-   <Route path="*" element={<Navigate to="/" replace/>}/>
+- </Routes></ThemeHost></AppProvider></BrowserRouter>;
+-}
+\ No newline at end of file
++export default function App() {
++  const basename = import.meta.env.BASE_URL.replace(/\/$/, "") || undefined;
++  return (
++    <BrowserRouter basename={basename}>
++      <AppProvider>
++        <ThemeHost>
++          <Routes>
++            <Route path="/" element={<PublicRoute section="overview" />} />
++            {["dues", "expenses", "payments", "balances", "history", "analytics", "reports"].map(x => (
++              <Route key={x} path={`/${x}`} element={<PublicRoute section={x} />} />
++            ))}
++            <Route path="*" element={<Navigate to="/" replace />} />
++          </Routes>
++        </ThemeHost>
++      </AppProvider>
++    </BrowserRouter>
++  );
++}
+diff --git a/src/admin-main.tsx b/src/admin-main.tsx
+new file mode 100644
+index 0000000..e5c091e
+--- /dev/null
++++ b/src/admin-main.tsx
+@@ -0,0 +1,8 @@
++import React from "react";
++import ReactDOM from "react-dom/client";
++import AdminApp from "./AdminApp";
++import "./styles.css";
++
++ReactDOM.createRoot(document.getElementById("root")!).render(
++  <React.StrictMode><AdminApp /></React.StrictMode>
++);
+diff --git a/src/components/AppShell.js b/src/components/AppShell.js
+deleted file mode 100644
+index 4b2aca8..0000000
+--- a/src/components/AppShell.js
++++ /dev/null
+@@ -1,7 +0,0 @@
+-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+-import { LogIn, ShieldCheck } from "lucide-react";
+-import { Sidebar, MobileNav } from "./Sidebar";
+-import { ThemeToggle } from "./ThemeToggle";
+-export function AppShell({ children, admin, theme, onTheme, userEmail, onLogin, onLogout }) {
+-    return (_jsxs("div", { className: `app-shell ${admin ? "admin-shell" : ""}`, children: [_jsx(Sidebar, { admin: admin }), _jsxs("div", { className: "main-wrap", children: [_jsxs("header", { className: "topbar", children: [_jsxs("div", { className: "topbar-title", children: [_jsx("div", { className: "eyebrow", children: admin ? "Administration" : "Parking & property ledger" }), _jsx("div", { className: "page-context", children: admin ? "Control centre" : "Public view" })] }), _jsxs("div", { className: "topbar-actions", children: [_jsxs("span", { className: "read-only-pill", children: [_jsx("span", { className: "live-dot" }), " ", admin ? "Protected" : "View only"] }), _jsx(ThemeToggle, { theme: theme, onChange: onTheme }), admin ? (_jsxs("button", { className: "user-chip", onClick: onLogout, title: "Sign out", children: [_jsx(ShieldCheck, { size: 16 }), _jsx("span", { children: userEmail || "Admin" })] })) : (_jsxs("button", { className: "secondary-btn compact", onClick: onLogin, children: [_jsx(LogIn, { size: 15 }), " Admin"] }))] })] }), _jsx("main", { className: "page", children: children })] }), _jsx(MobileNav, { admin: admin })] }));
+-}
+diff --git a/src/components/Charts.js b/src/components/Charts.js
+deleted file mode 100644
+index 47d82cb..0000000
+--- a/src/components/Charts.js
++++ /dev/null
+@@ -1,12 +0,0 @@
+-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, CartesianGrid } from "recharts";
+-const palette = ["#315c4d", "#b7833f", "#8b5e55", "#526b7a", "#8b8d74", "#6b4f5f"];
+-export function MonthlyBar({ data }) {
+-    return _jsx("div", { className: "chart", children: _jsx(ResponsiveContainer, { width: "100%", height: 260, children: _jsxs(BarChart, { data: data, margin: { top: 8, right: 10, left: -18, bottom: 0 }, children: [_jsx(CartesianGrid, { vertical: false, stroke: "var(--line)" }), _jsx(XAxis, { dataKey: "month", stroke: "var(--muted)", tickLine: false, axisLine: false }), _jsx(YAxis, { stroke: "var(--muted)", tickLine: false, axisLine: false, tickFormatter: v => `₹${Math.round(v / 1000)}k` }), _jsx(Tooltip, { formatter: (v) => [`₹${Number(v).toLocaleString("en-IN")}`, "Spent"], contentStyle: { background: "var(--surface-strong)", border: "1px solid var(--line)", borderRadius: 8, color: "var(--text)" } }), _jsx(Bar, { dataKey: "amount", fill: "var(--accent)", radius: [3, 3, 0, 0] })] }) }) });
+-}
+-export function CategoryDonut({ data }) {
+-    return _jsx("div", { className: "chart chart-donut", children: _jsx(ResponsiveContainer, { width: "100%", height: 260, children: _jsxs(PieChart, { children: [_jsx(Pie, { data: data, dataKey: "amount", nameKey: "name", innerRadius: 68, outerRadius: 92, paddingAngle: 2, children: data.map((_, i) => _jsx(Cell, { fill: palette[i % palette.length] }, i)) }), _jsx(Tooltip, { formatter: (v) => [`₹${Number(v).toLocaleString("en-IN")}`, "Spend"], contentStyle: { background: "var(--surface-strong)", border: "1px solid var(--line)", borderRadius: 8, color: "var(--text)" } })] }) }) });
+-}
+-export function TrendArea({ data }) {
+-    return _jsx("div", { className: "chart", children: _jsx(ResponsiveContainer, { width: "100%", height: 260, children: _jsxs(AreaChart, { data: data, margin: { top: 8, right: 10, left: -18, bottom: 0 }, children: [_jsx("defs", { children: _jsxs("linearGradient", { id: "areaFill", x1: "0", y1: "0", x2: "0", y2: "1", children: [_jsx("stop", { offset: "0%", stopColor: "var(--accent)", stopOpacity: 0.28 }), _jsx("stop", { offset: "100%", stopColor: "var(--accent)", stopOpacity: 0 })] }) }), _jsx(CartesianGrid, { vertical: false, stroke: "var(--line)" }), _jsx(XAxis, { dataKey: "month", stroke: "var(--muted)", tickLine: false, axisLine: false }), _jsx(YAxis, { stroke: "var(--muted)", tickLine: false, axisLine: false, tickFormatter: v => `₹${Math.round(v / 1000)}k` }), _jsx(Tooltip, { formatter: (v) => [`₹${Number(v).toLocaleString("en-IN")}`, "Spend"], contentStyle: { background: "var(--surface-strong)", border: "1px solid var(--line)", borderRadius: 8, color: "var(--text)" } }), _jsx(Area, { type: "monotone", dataKey: "amount", stroke: "var(--accent)", strokeWidth: 2, fill: "url(#areaFill)" })] }) }) });
+-}
+diff --git a/src/components/Metric.js b/src/components/Metric.js
+deleted file mode 100644
+index d45c547..0000000
+--- a/src/components/Metric.js
++++ /dev/null
+@@ -1,4 +0,0 @@
+-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+-export function Metric({ label, value, note, icon }) {
+-    return (_jsxs("div", { className: "metric", children: [_jsxs("div", { className: "metric-top", children: [_jsx("span", { children: label }), icon] }), _jsx("strong", { children: value }), note && _jsx("small", { children: note })] }));
+-}
+diff --git a/src/components/Modal.js b/src/components/Modal.js
+deleted file mode 100644
+index 30bda24..0000000
+--- a/src/components/Modal.js
++++ /dev/null
+@@ -1,8 +0,0 @@
+-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+-import { X } from "lucide-react";
+-export function Modal({ open, title, children, onClose, wide = false }) {
+-    if (!open)
+-        return null;
+-    return (_jsx("div", { className: "modal-backdrop", role: "dialog", "aria-modal": "true", onMouseDown: e => { if (e.target === e.currentTarget)
+-            onClose(); }, children: _jsxs("div", { className: `modal ${wide ? "modal-wide" : ""}`, children: [_jsxs("div", { className: "modal-head", children: [_jsxs("div", { children: [_jsx("div", { className: "eyebrow", children: "ParkLedger" }), _jsx("h2", { children: title })] }), _jsx("button", { className: "icon-btn", onClick: onClose, "aria-label": "Close", children: _jsx(X, { size: 18 }) })] }), children] }) }));
+-}
+diff --git a/src/components/Sidebar.js b/src/components/Sidebar.js
+deleted file mode 100644
+index e503b97..0000000
+--- a/src/components/Sidebar.js
++++ /dev/null
+@@ -1,34 +0,0 @@
+-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+-import { NavLink } from "react-router-dom";
+-import { BarChart3, Building2, CreditCard, FileText, LayoutDashboard, Receipt, Settings, Users, WalletCards, Repeat2, ScrollText, Tags, DoorOpen } from "lucide-react";
+-const publicItems = [
+-    ["overview", "Overview", LayoutDashboard],
+-    ["dues", "Current Dues", CreditCard],
+-    ["expenses", "Expenses", Receipt],
+-    ["payments", "Payments", WalletCards],
+-    ["balances", "Balances", Building2],
+-    ["history", "Monthly History", ScrollText],
+-    ["analytics", "Analytics", BarChart3],
+-    ["reports", "Reports", FileText]
+-];
+-const adminItems = [
+-    ["overview", "Overview", LayoutDashboard],
+-    ["expenses", "Expenses", Receipt],
+-    ["payments", "Payments", WalletCards],
+-    ["residents", "Residents", Users],
+-    ["flats", "Flats", DoorOpen],
+-    ["charges", "Monthly Charges", CreditCard],
+-    ["categories", "Categories", Tags],
+-    ["recurring", "Recurring Expenses", Repeat2],
+-    ["reports", "Reports", FileText],
+-    ["activity", "Activity Log", ScrollText],
+-    ["settings", "Settings", Settings]
+-];
+-export function Sidebar({ admin = false }) {
+-    const items = admin ? adminItems : publicItems;
+-    return (_jsxs("aside", { className: "sidebar", children: [_jsxs("div", { className: "brand", children: [_jsx("div", { className: "brand-mark", children: "P" }), _jsxs("div", { children: [_jsx("div", { className: "brand-name", children: "ParkLedger" }), _jsx("div", { className: "brand-kicker", children: admin ? "Admin Console" : "Public Ledger" })] })] }), _jsx("nav", { className: "nav-list", "aria-label": admin ? "Admin navigation" : "Dashboard navigation", children: items.map(([path, label, Icon]) => (_jsxs(NavLink, { to: admin ? `/admin/${path}` : `/${path}`, className: ({ isActive }) => `nav-link ${isActive ? "active" : ""}`, children: [_jsx(Icon, { size: 17 }), _jsx("span", { children: label })] }, path))) }), _jsxs("div", { className: "sidebar-foot", children: [_jsx("span", { className: "live-dot" }), "Firestore live"] })] }));
+-}
+-export function MobileNav({ admin = false }) {
+-    const items = admin ? adminItems.slice(0, 5) : publicItems.slice(0, 5);
+-    return (_jsx("nav", { className: "mobile-nav", children: items.map(([path, label, Icon]) => (_jsxs(NavLink, { to: admin ? `/admin/${path}` : `/${path}`, className: ({ isActive }) => `mobile-nav-link ${isActive ? "active" : ""}`, children: [_jsx(Icon, { size: 18 }), _jsx("span", { children: label })] }, path))) }));
+-}
+diff --git a/src/components/Sidebar.tsx b/src/components/Sidebar.tsx
+index c2a29c3..bf666e5 100644
+--- a/src/components/Sidebar.tsx
++++ b/src/components/Sidebar.tsx
+@@ -43,7 +43,7 @@ export function Sidebar({ admin = false }: { admin?: boolean }) {
+       </div>
+       <nav className="nav-list" aria-label={admin ? "Admin navigation" : "Dashboard navigation"}>
+         {items.map(([path, label, Icon]) => (
+-          <NavLink key={path} to={admin ? `/admin/${path}` : `/${path}`} className={({isActive}) => `nav-link ${isActive ? "active" : ""}`}>
++          <NavLink key={path} to={`/${path}`} className={({isActive}) => `nav-link ${isActive ? "active" : ""}`}>
+             <Icon size={17} />
+             <span>{label}</span>
+           </NavLink>
+@@ -62,7 +62,7 @@ export function MobileNav({ admin = false }: { admin?: boolean }) {
+   return (
+     <nav className="mobile-nav">
+       {items.map(([path, label, Icon]) => (
+-        <NavLink key={path} to={admin ? `/admin/${path}` : `/${path}`} className={({isActive}) => `mobile-nav-link ${isActive ? "active" : ""}`}>
++        <NavLink key={path} to={`/${path}`} className={({isActive}) => `mobile-nav-link ${isActive ? "active" : ""}`}>
+           <Icon size={18} />
+           <span>{label}</span>
+         </NavLink>
+diff --git a/src/components/StatusBadge.js b/src/components/StatusBadge.js
+deleted file mode 100644
+index 7d543fb..0000000
+--- a/src/components/StatusBadge.js
++++ /dev/null
+@@ -1,5 +0,0 @@
+-import { jsx as _jsx } from "react/jsx-runtime";
+-export function StatusBadge({ status }) {
+-    const labels = { paid: "Paid", partial: "Partial", pending: "Pending" };
+-    return _jsx("span", { className: `status-badge status-${status}`, children: labels[status] });
+-}
+diff --git a/src/components/ThemeToggle.js b/src/components/ThemeToggle.js
+deleted file mode 100644
+index 7fc65d4..0000000
+--- a/src/components/ThemeToggle.js
++++ /dev/null
+@@ -1,5 +0,0 @@
+-import { jsx as _jsx } from "react/jsx-runtime";
+-import { Moon, Sun } from "lucide-react";
+-export function ThemeToggle({ theme, onChange }) {
+-    return (_jsx("button", { className: "icon-btn", "aria-label": `Switch to ${theme === "dark" ? "light" : "dark"} theme`, onClick: () => onChange(theme === "dark" ? "light" : "dark"), title: "Toggle theme", children: theme === "dark" ? _jsx(Sun, { size: 18 }) : _jsx(Moon, { size: 18 }) }));
+-}
+diff --git a/src/context/AppContext.js b/src/context/AppContext.js
+deleted file mode 100644
+index a881179..0000000
+--- a/src/context/AppContext.js
++++ /dev/null
+@@ -1,40 +0,0 @@
+-import { jsx as _jsx } from "react/jsx-runtime";
+-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+-import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
+-import { auth, ADMIN_EMAIL, googleProvider } from "../lib/firebase";
+-import { subscribePublic, subscribeAdmin } from "../lib/firestore";
+-const empty = {
+-    residents: [], flats: [], categories: [], expenses: [], payments: [],
+-    recurringExpenses: [], activityLogs: [],
+-    settings: { currency: "INR", propertyName: "ParkLedger", monthStartDay: 1 }
+-};
+-const AppCtx = createContext(null);
+-export function AppProvider({ children }) {
+-    const [data, setData] = useState(empty);
+-    const [loading, setLoading] = useState(true);
+-    const [error, setError] = useState(null);
+-    const [user, setUser] = useState(null);
+-    useEffect(() => onAuthStateChanged(auth, u => setUser(u)), []);
+-    useEffect(() => {
+-        setLoading(true);
+-        setError(null);
+-        const unsub = (user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase())
+-            ? subscribeAdmin(setData, e => setError(e.message))
+-            : subscribePublic(setData, e => setError(e.message));
+-        const timer = window.setTimeout(() => setLoading(false), 450);
+-        return () => { unsub(); clearTimeout(timer); };
+-    }, [user]);
+-    const value = useMemo(() => ({
+-        data, loading, error, user,
+-        isAdmin: user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase(),
+-        login: async () => { await signInWithPopup(auth, googleProvider); },
+-        logout: async () => { await signOut(auth); }
+-    }), [data, loading, error, user]);
+-    return _jsx(AppCtx.Provider, { value: value, children: children });
+-}
+-export function useApp() {
+-    const c = useContext(AppCtx);
+-    if (!c)
+-        throw new Error("useApp must be used inside AppProvider");
+-    return c;
+-}
+diff --git a/src/context/ThemeContext.tsx b/src/context/ThemeContext.tsx
+new file mode 100644
+index 0000000..a07a19d
+--- /dev/null
++++ b/src/context/ThemeContext.tsx
+@@ -0,0 +1,12 @@
++import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
++
++type Theme = "light" | "dark";
++const ThemeContext = createContext<{ theme: Theme; setTheme: (v: Theme) => void }>({ theme: "light", setTheme: () => {} });
++
++export function ThemeHost({ children }: { children: ReactNode }) {
++  const [theme, setTheme] = useState<Theme>(() => localStorage.getItem("parkledger-theme") === "dark" ? "dark" : "light");
++  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("parkledger-theme", theme); }, [theme]);
++  return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;
++}
++
++export const useTheme = () => useContext(ThemeContext);
+diff --git a/src/lib/backup.js b/src/lib/backup.js
+deleted file mode 100644
+index 1eac65e..0000000
+--- a/src/lib/backup.js
++++ /dev/null
+@@ -1,59 +0,0 @@
+-import { downloadText, safeDate } from "./utils";
+-export const BACKUP_VERSION = 3;
+-export function createBackup(data) {
+-    return JSON.stringify({
+-        version: BACKUP_VERSION,
+-        exportedAt: new Date().toISOString(),
+-        app: "ParkLedger",
+-        data
+-    }, null, 2);
+-}
+-export function exportBackup(data) {
+-    downloadText(`parkledger-backup-${new Date().toISOString().slice(0, 10)}.json`, createBackup(data), "application/json");
+-}
+-export function exportLegacyTxt(data) {
+-    const lines = [
+-        "PARKLEDGER BACKUP",
+-        `VERSION=${BACKUP_VERSION}`,
+-        `EXPORTED_AT=${new Date().toISOString()}`,
+-        "",
+-        "[RESIDENTS]"
+-    ];
+-    data.residents.forEach(r => lines.push([r.id, r.name, r.flatId, r.shares, r.phone ?? "", r.active ? "1" : "0"].join("|")));
+-    lines.push("", "[FLATS]");
+-    data.flats.forEach(f => lines.push([f.id, f.number, f.label ?? "", f.active ? "1" : "0"].join("|")));
+-    lines.push("", "[CATEGORIES]");
+-    data.categories.forEach(c => lines.push([c.id, c.name, c.color ?? "", c.active ? "1" : "0"].join("|")));
+-    lines.push("", "[EXPENSES]");
+-    data.expenses.forEach(e => lines.push([
+-        e.id, safeDate(e.date), e.title, e.categoryId, e.amountCents, e.payerId, e.type,
+-        e.splitMode, JSON.stringify(e.split ?? {})
+-    ].join("|")));
+-    lines.push("", "[PAYMENTS]");
+-    data.payments.forEach(p => lines.push([
+-        p.id, p.residentId, p.amountCents, safeDate(p.date), p.expenseId ?? "", p.note ?? ""
+-    ].join("|")));
+-    downloadText(`parkledger-legacy-${new Date().toISOString().slice(0, 10)}.txt`, lines.join("\n"));
+-}
+-export function parseBackup(text) {
+-    const raw = JSON.parse(text);
+-    if (!raw || raw.app !== "ParkLedger" || !raw.data) {
+-        throw new Error("This file is not a valid ParkLedger backup.");
+-    }
+-    const d = raw.data;
+-    if (!Array.isArray(d.residents) || !Array.isArray(d.flats) ||
+-        !Array.isArray(d.categories) || !Array.isArray(d.expenses) ||
+-        !Array.isArray(d.payments) || !Array.isArray(d.recurringExpenses)) {
+-        throw new Error("Backup is missing required collections.");
+-    }
+-    return {
+-        residents: d.residents,
+-        flats: d.flats,
+-        categories: d.categories,
+-        expenses: d.expenses,
+-        payments: d.payments,
+-        recurringExpenses: d.recurringExpenses,
+-        activityLogs: Array.isArray(d.activityLogs) ? d.activityLogs : [],
+-        settings: d.settings ?? { currency: "INR", propertyName: "ParkLedger", monthStartDay: 1 }
+-    };
+-}
+diff --git a/src/lib/firebase.js b/src/lib/firebase.js
+deleted file mode 100644
+index cfa2b66..0000000
+--- a/src/lib/firebase.js
++++ /dev/null
+@@ -1,20 +0,0 @@
+-import { initializeApp } from "firebase/app";
+-import { getAuth, GoogleAuthProvider } from "firebase/auth";
+-import { getFirestore } from "firebase/firestore";
+-import { getStorage } from "firebase/storage";
+-const config = {
+-    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+-    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+-    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+-    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+-    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+-    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+-    measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
+-};
+-export const app = initializeApp(config);
+-export const auth = getAuth(app);
+-export const db = getFirestore(app);
+-export const storage = getStorage(app);
+-export const googleProvider = new GoogleAuthProvider();
+-googleProvider.setCustomParameters({ prompt: "select_account" });
+-export const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || "yugrajsekhon20@gmail.com";
+diff --git a/src/lib/firestore.js b/src/lib/firestore.js
+deleted file mode 100644
+index 3162bf1..0000000
+--- a/src/lib/firestore.js
++++ /dev/null
+@@ -1,96 +0,0 @@
+-import { addDoc, collection, deleteDoc, doc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
+-import { db } from "./firebase";
+-const names = {
+-    residents: "residents",
+-    flats: "flats",
+-    categories: "categories",
+-    expenses: "expenses",
+-    payments: "payments",
+-    recurringExpenses: "recurringExpenses",
+-    activityLogs: "activityLogs",
+-    settings: "settings"
+-};
+-function listen(name, setter) {
+-    return onSnapshot(collection(db, names[name]), snap => {
+-        setter(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+-    });
+-}
+-export function subscribePublic(onData, onError) {
+-    const state = {
+-        residents: [], flats: [], categories: [], expenses: [], payments: [],
+-        recurringExpenses: [], activityLogs: [], settings: {
+-            currency: "INR", propertyName: "ParkLedger", monthStartDay: 1
+-        }
+-    };
+-    const unsubs = [
+-        listen("residents", v => { state.residents = v; onData({ ...state }); }),
+-        listen("flats", v => { state.flats = v; onData({ ...state }); }),
+-        listen("categories", v => { state.categories = v; onData({ ...state }); }),
+-        listen("expenses", v => { state.expenses = v; onData({ ...state }); }),
+-        listen("payments", v => { state.payments = v; onData({ ...state }); }),
+-        onSnapshot(doc(db, "settings", "global"), snap => {
+-            if (snap.exists())
+-                state.settings = snap.data();
+-            onData({ ...state });
+-        }, onError)
+-    ];
+-    return () => unsubs.forEach(u => u());
+-}
+-export function subscribeAdmin(onData, onError) {
+-    const state = {
+-        residents: [], flats: [], categories: [], expenses: [], payments: [],
+-        recurringExpenses: [], activityLogs: [], settings: {
+-            currency: "INR", propertyName: "ParkLedger", monthStartDay: 1
+-        }
+-    };
+-    const set = (key, value) => {
+-        state[key] = value;
+-        onData({ ...state });
+-    };
+-    const unsubs = [
+-        listen("residents", v => set("residents", v)),
+-        listen("flats", v => set("flats", v)),
+-        listen("categories", v => set("categories", v)),
+-        listen("expenses", v => set("expenses", v)),
+-        listen("payments", v => set("payments", v)),
+-        listen("recurringExpenses", v => set("recurringExpenses", v)),
+-        listen("activityLogs", v => set("activityLogs", v)),
+-        onSnapshot(doc(db, "settings", "global"), snap => {
+-            if (snap.exists())
+-                state.settings = snap.data();
+-            onData({ ...state });
+-        }, onError)
+-    ];
+-    return () => unsubs.forEach(u => u());
+-}
+-export async function saveDoc(collectionName, id, data) {
+-    const clean = { ...data, updatedAt: serverTimestamp() };
+-    if (id) {
+-        await setDoc(doc(db, collectionName, id), clean, { merge: true });
+-        return id;
+-    }
+-    const ref = await addDoc(collection(db, collectionName), { ...clean, createdAt: serverTimestamp() });
+-    return ref.id;
+-}
+-export async function removeDoc(collectionName, id) {
+-    await deleteDoc(doc(db, collectionName, id));
+-}
+-export async function writeActivity(log) {
+-    await addDoc(collection(db, "activityLogs"), {
+-        ...log,
+-        createdAt: serverTimestamp()
+-    });
+-}
+-export async function recordPayment(payment) {
+-    const ref = await addDoc(collection(db, "payments"), {
+-        ...payment,
+-        createdAt: serverTimestamp()
+-    });
+-    return ref.id;
+-}
+-export async function updateSettings(settings) {
+-    await setDoc(doc(db, "settings", "global"), {
+-        ...settings,
+-        updatedAt: serverTimestamp()
+-    }, { merge: true });
+-}
+diff --git a/src/lib/utils.js b/src/lib/utils.js
+deleted file mode 100644
+index 2e628c6..0000000
+--- a/src/lib/utils.js
++++ /dev/null
+@@ -1,87 +0,0 @@
+-export const money = (cents) => new Intl.NumberFormat("en-IN", {
+-    style: "currency",
+-    currency: "INR",
+-    maximumFractionDigits: 2
+-}).format((Number.isFinite(cents) ? cents : 0) / 100);
+-export const cents = (value) => {
+-    const n = Number(value);
+-    return Number.isFinite(n) ? Math.round(n * 100) : 0;
+-};
+-export const safeDate = (value) => {
+-    if (!value)
+-        return "";
+-    const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+-    return m ? `${m[1]}-${m[2]}-${m[3]}` : "";
+-};
+-export const monthKey = (date) => safeDate(date).slice(0, 7);
+-export const monthLabel = (key) => {
+-    const [y, m] = key.split("-").map(Number);
+-    if (!y || !m)
+-        return key;
+-    return new Intl.DateTimeFormat("en-IN", {
+-        month: "short",
+-        year: "numeric"
+-    }).format(new Date(y, m - 1, 1));
+-};
+-export const currentMonth = () => {
+-    const d = new Date();
+-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+-};
+-export const sanitize = (value) => value.replace(/[<>]/g, "").replace(/[\u0000-\u001F\u007F]/g, "").trim();
+-export function exactSplit(totalCents, residents, mode, custom) {
+-    const active = residents.filter(r => r.id);
+-    if (!active.length || totalCents <= 0)
+-        return {};
+-    const weights = active.map(r => ({
+-        id: r.id,
+-        weight: mode === "equal"
+-            ? 1
+-            : mode === "custom"
+-                ? Math.max(0, Number(custom?.[r.id] ?? 0))
+-                : Math.max(0, Number(r.shares ?? 0))
+-    }));
+-    const sum = weights.reduce((a, b) => a + b.weight, 0);
+-    if (sum <= 0)
+-        return exactSplit(totalCents, active, "equal");
+-    const raw = weights.map(w => ({
+-        ...w,
+-        exact: (totalCents * w.weight) / sum
+-    }));
+-    const result = {};
+-    let allocated = 0;
+-    raw.forEach((r, i) => {
+-        const base = Math.floor(r.exact);
+-        result[r.id] = base;
+-        allocated += base;
+-        if (i === raw.length - 1)
+-            result[r.id] += totalCents - allocated;
+-    });
+-    return result;
+-}
+-export function statusFor(owedCents, paidCents) {
+-    const remaining = Math.max(0, owedCents - paidCents);
+-    if (remaining <= 0)
+-        return "paid";
+-    if (paidCents > 0)
+-        return "partial";
+-    return "pending";
+-}
+-export function timestampValue(value) {
+-    if (!value)
+-        return 0;
+-    if (typeof value === "string")
+-        return new Date(value).getTime();
+-    if (typeof value === "object" && value && "toMillis" in value && typeof value.toMillis === "function") {
+-        return value.toMillis();
+-    }
+-    return 0;
+-}
+-export function downloadText(name, text, type = "text/plain") {
+-    const blob = new Blob([text], { type });
+-    const url = URL.createObjectURL(blob);
+-    const a = document.createElement("a");
+-    a.href = url;
+-    a.download = name;
+-    a.click();
+-    URL.revokeObjectURL(url);
+-}
+diff --git a/src/main.js b/src/main.js
+deleted file mode 100644
+index 74603c2..0000000
+--- a/src/main.js
++++ /dev/null
+@@ -1,6 +0,0 @@
+-import { jsx as _jsx } from "react/jsx-runtime";
+-import React from "react";
+-import ReactDOM from "react-dom/client";
+-import App from "./App";
+-import "./styles.css";
+-ReactDOM.createRoot(document.getElementById("root")).render(_jsx(React.StrictMode, { children: _jsx(App, {}) }));
+diff --git a/src/pages/AdminDashboard.js b/src/pages/AdminDashboard.js
+deleted file mode 100644
+index ba516d2..0000000
+--- a/src/pages/AdminDashboard.js
++++ /dev/null
+@@ -1,131 +0,0 @@
+-import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+-import { useMemo, useState } from "react";
+-import * as XLSX from "xlsx";
+-import { jsPDF } from "jspdf";
+-import { Navigate } from "react-router-dom";
+-import { Plus, Save, Trash2, UserPlus, RefreshCw, Download, Upload, ShieldCheck, Receipt, Users, Wallet } from "lucide-react";
+-import { useApp } from "../context/AppContext";
+-import { cents, currentMonth, exactSplit, money, monthKey, monthLabel, sanitize, statusFor } from "../lib/utils";
+-import { saveDoc, removeDoc, recordPayment, writeActivity, updateSettings } from "../lib/firestore";
+-import { exportBackup, exportLegacyTxt, parseBackup } from "../lib/backup";
+-import { Metric } from "../components/Metric";
+-import { MonthlyBar, CategoryDonut } from "../components/Charts";
+-import { Modal } from "../components/Modal";
+-import { StatusBadge } from "../components/StatusBadge";
+-export function AdminDashboard({ section = "overview" }) {
+-    const { data, user, isAdmin } = useApp();
+-    const [modal, setModal] = useState(null);
+-    const [saving, setSaving] = useState(false);
+-    const [toast, setToast] = useState("");
+-    if (!user || !isAdmin)
+-        return _jsx(Navigate, { to: "/admin/login", replace: true });
+-    const residentMap = new Map(data.residents.map(r => [r.id, r]));
+-    const categoryMap = new Map(data.categories.map(c => [c.id, c.name]));
+-    const split = new Map();
+-    data.expenses.forEach(e => Object.entries(e.split || {}).forEach(([id, v]) => split.set(id, (split.get(id) || 0) + Number(v))));
+-    const paid = new Map();
+-    data.payments.forEach(p => paid.set(p.residentId, (paid.get(p.residentId) || 0) + p.amountCents));
+-    const total = data.expenses.reduce((a, e) => a + e.amountCents, 0);
+-    const monthly = data.expenses.filter(e => monthKey(e.date) === currentMonth()).reduce((a, e) => a + e.amountCents, 0);
+-    data.expenses.forEach(e => {
+-        const ownShare = Number(e.split?.[e.payerId] ?? 0);
+-        if (ownShare)
+-            paid.set(e.payerId, (paid.get(e.payerId) || 0) + ownShare);
+-    });
+-    const pending = [...split.entries()].reduce((a, [id, v]) => a + Math.max(0, v - (paid.get(id) || 0)), 0);
+-    const monthlyData = useMemo(() => { const m = new Map(); data.expenses.forEach(e => m.set(monthKey(e.date), (m.get(monthKey(e.date)) || 0) + e.amountCents)); return [...m.entries()].sort().slice(-8).map(([m, amount]) => ({ month: monthLabel(m), amount })); }, [data.expenses]);
+-    const cats = useMemo(() => { const m = new Map(); data.expenses.forEach(e => { const n = categoryMap.get(e.categoryId) || "Other"; m.set(n, (m.get(n) || 0) + e.amountCents); }); return [...m.entries()].map(([name, amount]) => ({ name, amount })); }, [data.expenses]);
+-    const notify = (s) => { setToast(s); window.setTimeout(() => setToast(""), 2800); };
+-    const activity = async (action, recordId, recordLabel) => writeActivity({ action, actorEmail: user.email || "", recordId, recordLabel });
+-    const generateMonthly = async () => {
+-        setSaving(true);
+-        try {
+-            const month = currentMonth();
+-            let created = 0;
+-            for (const r of data.recurringExpenses.filter(x => x.active)) {
+-                if (r.lastGeneratedMonth === month)
+-                    continue;
+-                const exists = data.expenses.some(e => e.recurringId === r.id && monthKey(e.date) === month);
+-                if (exists)
+-                    continue;
+-                const splitMap = exactSplit(r.amountCents, data.residents.filter(x => x.active), r.splitMode, r.split);
+-                const id = await saveDoc("expenses", undefined, { title: r.title, amountCents: r.amountCents, categoryId: r.categoryId, payerId: r.payerId, date: `${month}-${String(r.dayOfMonth).padStart(2, "0")}`, type: "monthly", recurringId: r.id, splitMode: r.splitMode, split: splitMap });
+-                await saveDoc("recurringExpenses", r.id, { lastGeneratedMonth: month });
+-                await activity("monthly.generated", id, r.title);
+-                created++;
+-            }
+-            notify(created ? `${created} recurring expense(s) generated.` : "Nothing new to generate.");
+-        }
+-        finally {
+-            setSaving(false);
+-        }
+-    };
+-    const restore = async (file) => {
+-        setSaving(true);
+-        try {
+-            const text = await file.text();
+-            const restored = parseBackup(text);
+-            if (!window.confirm("Restore this backup? Existing records with the same IDs will be replaced. New records will be added."))
+-                return;
+-            for (const r of restored.residents)
+-                await saveDoc("residents", r.id, r);
+-            for (const f of restored.flats)
+-                await saveDoc("flats", f.id, f);
+-            for (const c of restored.categories)
+-                await saveDoc("categories", c.id, c);
+-            for (const e of restored.expenses)
+-                await saveDoc("expenses", e.id, e);
+-            for (const p of restored.payments)
+-                await saveDoc("payments", p.id, p);
+-            for (const r of restored.recurringExpenses)
+-                await saveDoc("recurringExpenses", r.id, r);
+-            await updateSettings(restored.settings);
+-            await activity("backup.restored", undefined, "Backup restore");
+-            notify("Backup restored successfully.");
+-        }
+-        catch (e) {
+-            notify(e.message || "Restore failed.");
+-        }
+-        finally {
+-            setSaving(false);
+-        }
+-    };
+-    return _jsxs(_Fragment, { children: [toast && _jsxs("div", { className: "toast", children: [_jsx(ShieldCheck, { size: 17 }), toast] }), _jsxs("div", { className: "page-header", children: [_jsxs("div", { children: [_jsx("div", { className: "eyebrow", children: "Protected administrator workspace" }), _jsx("h1", { children: "Run the ledger." }), _jsx("p", { children: "Changes here are written to Firestore and flow to the public dashboard in real time." })] }), _jsxs("div", { className: "header-actions", children: [_jsxs("button", { className: "secondary-btn", onClick: generateMonthly, disabled: saving, children: [_jsx(RefreshCw, { size: 16 }), " Generate dues"] }), _jsxs("button", { className: "primary-btn", onClick: () => setModal("expense"), children: [_jsx(Plus, { size: 16 }), " New expense"] })] })] }), section === "overview" && _jsxs(_Fragment, { children: [_jsxs("div", { className: "metrics-grid", children: [_jsx(Metric, { label: "Total expenses", value: money(total), note: `${data.expenses.length} records`, icon: _jsx(Receipt, { size: 16 }) }), _jsx(Metric, { label: "This month", value: money(monthly), note: monthLabel(currentMonth()), icon: _jsx(Wallet, { size: 16 }) }), _jsx(Metric, { label: "Outstanding", value: money(pending), note: "Calculated from live splits", icon: _jsx(Wallet, { size: 16 }) }), _jsx(Metric, { label: "Active residents", value: String(data.residents.filter(r => r.active).length), note: `${data.flats.filter(f => f.active).length} active flats`, icon: _jsx(Users, { size: 16 }) })] }), _jsxs("div", { className: "dashboard-grid", children: [_jsxs("section", { className: "panel span-2", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Monthly spending" }), _jsx("p", { children: "Last eight recorded months" })] }) }), _jsx(MonthlyBar, { data: monthlyData })] }), _jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Category spend" }), _jsx("p", { children: "Current ledger" })] }) }), _jsx(CategoryDonut, { data: cats })] }), _jsxs("section", { className: "panel span-2", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Outstanding balances" }), _jsx("p", { children: "Who still owes money" })] }) }), _jsx(AdminDues, { data: data })] }), _jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Recent activity" }), _jsx("p", { children: "Audit trail" })] }) }), _jsx("div", { className: "activity-list", children: data.activityLogs.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))).slice(0, 8).map(a => _jsxs("div", { className: "activity-row", children: [_jsx("div", { className: "activity-icon", children: _jsx(ShieldCheck, { size: 16 }) }), _jsxs("div", { children: [_jsx("strong", { children: a.action }), _jsxs("small", { children: [a.recordLabel || a.recordId || "Ledger", " \u00B7 ", a.actorEmail] })] })] }, a.id)) })] })] })] }), section === "expenses" && _jsx(ExpenseAdmin, { data: data, notify: notify, activity: activity, onAdd: () => setModal("expense") }), section === "payments" && _jsx(PaymentAdmin, { data: data, notify: notify, activity: activity, onAdd: () => setModal("payment") }), section === "residents" && _jsx(ResidentsAdmin, { data: data, notify: notify, activity: activity, onAdd: () => setModal("resident") }), section === "flats" && _jsx(SimpleAdmin, { title: "Flats", items: data.flats, fields: ["number", "label", "active"], collection: "flats", notify: notify }), section === "charges" && _jsx(ChargesAdmin, { data: data, notify: notify }), section === "categories" && _jsx(SimpleAdmin, { title: "Categories", items: data.categories, fields: ["name", "color", "active"], collection: "categories", notify: notify }), section === "recurring" && _jsx(RecurringAdmin, { data: data, notify: notify, onAdd: () => setModal("recurring") }), section === "reports" && _jsx(ReportsAdmin, { data: data }), section === "activity" && _jsx(ActivityAdmin, { data: data }), section === "settings" && _jsx(SettingsAdmin, { data: data, notify: notify, onExport: () => exportBackup(data), onTxt: () => exportLegacyTxt(data), onRestore: restore }), _jsx(Modal, { open: modal === "expense", title: "New expense", onClose: () => setModal(null), wide: true, children: _jsx(ExpenseForm, { data: data, onDone: () => { setModal(null); notify("Expense created."); }, activity: activity }) }), _jsx(Modal, { open: modal === "payment", title: "Record payment", onClose: () => setModal(null), children: _jsx(PaymentForm, { data: data, onDone: () => { setModal(null); notify("Payment recorded."); }, activity: activity }) }), _jsx(Modal, { open: modal === "resident", title: "Add resident", onClose: () => setModal(null), children: _jsx(ResidentForm, { data: data, onDone: () => { setModal(null); notify("Resident added."); }, activity: activity }) }), _jsx(Modal, { open: modal === "recurring", title: "Recurring expense", onClose: () => setModal(null), children: _jsx(RecurringForm, { data: data, onDone: () => { setModal(null); notify("Recurring expense created."); } }) })] });
+-}
+-function AdminDues({ data }) { const split = new Map(); data.expenses.forEach((e) => Object.entries(e.split || {}).forEach(([id, v]) => split.set(id, (split.get(id) || 0) + Number(v)))); const paid = new Map(); data.expenses.forEach((e) => { const ownShare = Number(e.split?.[e.payerId] ?? 0); if (ownShare)
+-    paid.set(e.payerId, (paid.get(e.payerId) || 0) + ownShare); }); data.payments.forEach((p) => paid.set(p.residentId, (paid.get(p.residentId) || 0) + p.amountCents)); return _jsx("div", { className: "table-wrap", children: _jsxs("table", { children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: "Resident" }), _jsx("th", { children: "Owed" }), _jsx("th", { children: "Paid" }), _jsx("th", { children: "Remaining" }), _jsx("th", { children: "Status" })] }) }), _jsx("tbody", { children: data.residents.filter((r) => r.active).map((r) => { const o = split.get(r.id) || 0, p = paid.get(r.id) || 0, rem = Math.max(0, o - p); return _jsxs("tr", { children: [_jsxs("td", { children: [_jsx("strong", { children: r.name }), _jsxs("small", { children: ["Flat ", r.flatId] })] }), _jsx("td", { children: money(o) }), _jsx("td", { children: money(p) }), _jsx("td", { children: money(rem) }), _jsx("td", { children: _jsx(StatusBadge, { status: statusFor(o, p) }) })] }, r.id); }) })] }) }); }
+-function ExpenseAdmin({ data, notify, activity, onAdd }) { const [q, setQ] = useState(""); const cats = new Map(data.categories.map((c) => [c.id, c.name])); const residents = new Map(data.residents.map((r) => [r.id, r.name])); const list = data.expenses.filter((e) => `${e.title} ${cats.get(e.categoryId) || ""} ${residents.get(e.payerId) || ""}`.toLowerCase().includes(q.toLowerCase())); return _jsxs("section", { className: "panel", children: [_jsxs("div", { className: "panel-head", children: [_jsxs("div", { children: [_jsx("h2", { children: "Expenses" }), _jsx("p", { children: "Full write access, search and deletion" })] }), _jsxs("button", { className: "primary-btn", onClick: onAdd, children: [_jsx(Plus, { size: 15 }), " Add expense"] })] }), _jsx("div", { className: "filters", children: _jsxs("label", { className: "search-box", children: [_jsx(Receipt, { size: 16 }), _jsx("input", { placeholder: "Search ledger", value: q, onChange: e => setQ(e.target.value) })] }) }), _jsx("div", { className: "table-wrap", children: _jsxs("table", { children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: "Date" }), _jsx("th", { children: "Expense" }), _jsx("th", { children: "Category" }), _jsx("th", { children: "Payer" }), _jsx("th", { children: "Amount" }), _jsx("th", {})] }) }), _jsx("tbody", { children: list.map((e) => _jsxs("tr", { children: [_jsx("td", { children: e.date }), _jsxs("td", { children: [_jsx("strong", { children: e.title }), _jsx("small", { children: e.type })] }), _jsx("td", { children: cats.get(e.categoryId) || "—" }), _jsx("td", { children: residents.get(e.payerId) || "—" }), _jsx("td", { children: _jsx("strong", { children: money(e.amountCents) }) }), _jsx("td", { children: _jsx("button", { className: "icon-btn danger", onClick: async () => { if (!confirm("Delete this expense?"))
+-                                            return; await removeDoc("expenses", e.id); await activity("expense.deleted", e.id, e.title); notify("Expense deleted."); }, children: _jsx(Trash2, { size: 15 }) }) })] }, e.id)) })] }) })] }); }
+-function PaymentAdmin({ data, notify, activity, onAdd }) { return _jsxs("section", { className: "panel", children: [_jsxs("div", { className: "panel-head", children: [_jsxs("div", { children: [_jsx("h2", { children: "Payments" }), _jsx("p", { children: "Partial and full settlements" })] }), _jsxs("button", { className: "primary-btn", onClick: onAdd, children: [_jsx(Plus, { size: 15 }), " Record payment"] })] }), _jsx("div", { className: "table-wrap", children: _jsxs("table", { children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: "Date" }), _jsx("th", { children: "Resident" }), _jsx("th", { children: "Amount" }), _jsx("th", { children: "Note" })] }) }), _jsx("tbody", { children: data.payments.slice().sort((a, b) => b.date.localeCompare(a.date)).map((p) => _jsxs("tr", { children: [_jsx("td", { children: p.date }), _jsx("td", { children: data.residents.find((r) => r.id === p.residentId)?.name || "Unknown" }), _jsx("td", { children: _jsx("strong", { children: money(p.amountCents) }) }), _jsx("td", { children: p.note || "—" })] }, p.id)) })] }) })] }); }
+-function ResidentsAdmin({ data, notify, activity, onAdd }) { return _jsxs("section", { className: "panel", children: [_jsxs("div", { className: "panel-head", children: [_jsxs("div", { children: [_jsx("h2", { children: "Residents" }), _jsx("p", { children: "Shares, flats and active status" })] }), _jsxs("button", { className: "primary-btn", onClick: onAdd, children: [_jsx(UserPlus, { size: 15 }), " Add resident"] })] }), _jsx("div", { className: "resident-grid", children: data.residents.map((r) => _jsxs("div", { className: "resident-admin", children: [_jsxs("div", { children: [_jsx("strong", { children: r.name }), _jsxs("small", { children: ["Flat ", r.flatId, " \u00B7 ", r.shares, " shares \u00B7 ", r.active ? "Active" : "Inactive"] })] }), _jsx("span", { className: "section-tag", children: r.phone || "No phone" })] }, r.id)) })] }); }
+-function SimpleAdmin({ title, items, fields, collection, notify }) { const [name, setName] = useState(""); return _jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: title }), _jsxs("p", { children: ["Manage ", title.toLowerCase(), " without hardcoding"] })] }) }), _jsxs("div", { className: "inline-form", children: [_jsx("input", { value: name, onChange: e => setName(e.target.value), placeholder: `${title.slice(0, -1)} name` }), _jsxs("button", { className: "primary-btn", onClick: async () => { if (!name.trim())
+-                        return; await saveDoc(collection, undefined, { [fields[0]]: sanitize(name), active: true }); setName(""); notify(`${title.slice(0, -1)} added.`); }, children: [_jsx(Plus, { size: 15 }), " Add"] })] }), _jsx("div", { className: "simple-list", children: items.map((x) => _jsxs("div", { className: "simple-row", children: [_jsxs("div", { children: [_jsx("strong", { children: x[fields[0]] }), _jsx("small", { children: x.label || x.color || "" })] }), _jsx("span", { className: "section-tag", children: x.active ? "Active" : "Inactive" })] }, x.id)) })] }); }
+-function ChargesAdmin({ data, notify }) { return _jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Monthly charges" }), _jsx("p", { children: "Use recurring expenses for automatic monthly generation." })] }) }), _jsxs("div", { className: "callout", children: [_jsx("strong", { children: "Guarded monthly generation" }), _jsx("p", { children: "ParkLedger checks both the recurring record's lastGeneratedMonth and existing expense.recurringId + month before creating a record, preventing duplicates." })] }), _jsx("button", { className: "secondary-btn", onClick: () => notify("Use Recurring Expenses to define monthly charges."), children: "Review recurring charges" })] }); }
+-function RecurringAdmin({ data, notify, onAdd }) { return _jsxs("section", { className: "panel", children: [_jsxs("div", { className: "panel-head", children: [_jsxs("div", { children: [_jsx("h2", { children: "Recurring expenses" }), _jsx("p", { children: "Automatic monthly generation with duplicate protection" })] }), _jsxs("button", { className: "primary-btn", onClick: onAdd, children: [_jsx(Plus, { size: 15 }), " Add recurring"] })] }), _jsx("div", { className: "simple-list", children: data.recurringExpenses.map((r) => _jsxs("div", { className: "simple-row", children: [_jsxs("div", { children: [_jsx("strong", { children: r.title }), _jsxs("small", { children: [money(r.amountCents), " \u00B7 day ", r.dayOfMonth, " \u00B7 ", r.active ? "Active" : "Paused"] })] }), _jsx("span", { className: "section-tag", children: r.lastGeneratedMonth || "Not generated" })] }, r.id)) })] }); }
+-function ReportsAdmin({ data }) {
+-    const rows = data.expenses.map((e) => ({
+-        Date: e.date, Title: e.title, Amount_INR: e.amountCents / 100, Type: e.type,
+-        Category: data.categories.find((c) => c.id === e.categoryId)?.name || "",
+-        Payer: data.residents.find((r) => r.id === e.payerId)?.name || ""
+-    }));
+-    const csv = () => { const ws = XLSX.utils.json_to_sheet(rows); const csv = XLSX.utils.sheet_to_csv(ws); const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); a.download = "parkledger-report.csv"; a.click(); };
+-    const xlsx = () => { const wb = XLSX.utils.book_new(); const ws = XLSX.utils.json_to_sheet(rows); XLSX.utils.book_append_sheet(wb, ws, "Expenses"); XLSX.writeFile(wb, "parkledger-report.xlsx"); };
+-    const pdf = () => { const doc = new jsPDF({ orientation: "landscape" }); doc.setFontSize(18); doc.text("ParkLedger Expense Report", 14, 16); doc.setFontSize(9); let y = 25; doc.text("Date", 14, y); doc.text("Expense", 40, y); doc.text("Category", 125, y); doc.text("Payer", 175, y); doc.text("Amount", 245, y); y += 6; rows.slice(0, 35).forEach((r) => { doc.text(String(r.Date || ""), 14, y); doc.text(String(r.Title || "").slice(0, 42), 40, y); doc.text(String(r.Category || "").slice(0, 22), 125, y); doc.text(String(r.Payer || "").slice(0, 22), 175, y); doc.text(`₹${Number(r.Amount_INR || 0).toLocaleString("en-IN")}`, 245, y); y += 6; }); doc.save("parkledger-report.pdf"); };
+-    return _jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Reports" }), _jsx("p", { children: "Export the live ledger in common formats." })] }) }), _jsx("div", { className: "report-grid", children: ["Monthly report", "Yearly report", "Expense report", "Payment report", "Outstanding dues", "Resident report"].map(x => _jsxs("div", { className: "report-card", children: [_jsx(Receipt, { size: 20 }), _jsx("h3", { children: x }), _jsx("p", { children: "Generate from current Firestore data." }), _jsxs("div", { className: "button-stack", children: [_jsxs("button", { className: "secondary-btn", onClick: csv, children: [_jsx(Download, { size: 14 }), " CSV"] }), _jsx("button", { className: "secondary-btn", onClick: xlsx, children: "Excel" }), _jsx("button", { className: "secondary-btn", onClick: pdf, children: "PDF" })] })] }, x)) })] });
+-}
+-function ActivityAdmin({ data }) { return _jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Activity log" }), _jsx("p", { children: "Administrative changes" })] }) }), _jsx("div", { className: "table-wrap", children: _jsxs("table", { children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: "Action" }), _jsx("th", { children: "Record" }), _jsx("th", { children: "User" }), _jsx("th", { children: "Timestamp" })] }) }), _jsx("tbody", { children: data.activityLogs.slice().reverse().map((a) => _jsxs("tr", { children: [_jsx("td", { children: _jsx("span", { className: "section-tag", children: a.action }) }), _jsx("td", { children: a.recordLabel || a.recordId || "—" }), _jsx("td", { children: a.actorEmail }), _jsx("td", { children: String(a.createdAt || "").slice(0, 24) })] }, a.id)) })] }) })] }); }
+-function SettingsAdmin({ data, notify, onExport, onTxt, onRestore }) { return _jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Settings & backup" }), _jsx("p", { children: "Exports are non-destructive. Restore requires confirmation." })] }) }), _jsxs("div", { className: "settings-grid", children: [_jsxs("div", { className: "setting-card", children: [_jsx("h3", { children: "Property name" }), _jsx("input", { defaultValue: data.settings.propertyName, onBlur: async (e) => { await updateSettings({ propertyName: sanitize(e.target.value) }); notify("Settings saved."); } }), _jsx("small", { children: "Shown throughout the public ledger." })] }), _jsxs("div", { className: "setting-card", children: [_jsx("h3", { children: "Backups" }), _jsxs("div", { className: "button-stack", children: [_jsxs("button", { className: "secondary-btn", onClick: onExport, children: [_jsx(Download, { size: 15 }), " JSON backup"] }), _jsxs("button", { className: "secondary-btn", onClick: onTxt, children: [_jsx(Download, { size: 15 }), " Legacy TXT"] }), _jsxs("label", { className: "secondary-btn", children: [_jsx(Upload, { size: 15 }), " Restore backup", _jsx("input", { type: "file", accept: ".json,.txt", hidden: true, onChange: e => e.target.files?.[0] && onRestore(e.target.files[0]) })] })] })] })] })] }); }
+-function ExpenseForm({ data, onDone, activity }) { const [title, setTitle] = useState(""); const [amount, setAmount] = useState(""); const [cat, setCat] = useState(data.categories[0]?.id || ""); const [payer, setPayer] = useState(data.residents[0]?.id || ""); const [date, setDate] = useState(new Date().toISOString().slice(0, 10)); const [type, setType] = useState("one-time"); const [saving, setSaving] = useState(false); return _jsxs("form", { className: "form-grid", onSubmit: async (e) => { e.preventDefault(); setSaving(true); try {
+-        const amountC = cents(amount);
+-        const split = exactSplit(amountC, data.residents.filter((r) => r.active), "shares");
+-        const id = await saveDoc("expenses", undefined, { title: sanitize(title), amountCents: amountC, categoryId: cat, payerId: payer, date, type, splitMode: "shares", split });
+-        await activity("expense.created", id, title);
+-        onDone();
+-    }
+-    finally {
+-        setSaving(false);
+-    } }, children: [_jsxs("label", { children: ["Title", _jsx("input", { required: true, value: title, onChange: e => setTitle(e.target.value) })] }), _jsxs("label", { children: ["Amount (\u20B9)", _jsx("input", { required: true, min: "0.01", step: "0.01", type: "number", value: amount, onChange: e => setAmount(e.target.value) })] }), _jsxs("label", { children: ["Category", _jsx("select", { value: cat, onChange: e => setCat(e.target.value), children: data.categories.map((c) => _jsx("option", { value: c.id, children: c.name }, c.id)) })] }), _jsxs("label", { children: ["Payer", _jsx("select", { value: payer, onChange: e => setPayer(e.target.value), children: data.residents.filter((r) => r.active).map((r) => _jsx("option", { value: r.id, children: r.name }, r.id)) })] }), _jsxs("label", { children: ["Date", _jsx("input", { type: "date", value: date, onChange: e => setDate(e.target.value) })] }), _jsxs("label", { children: ["Type", _jsxs("select", { value: type, onChange: e => setType(e.target.value), children: [_jsx("option", { value: "one-time", children: "One-time" }), _jsx("option", { value: "monthly", children: "Monthly" }), _jsx("option", { value: "recurring", children: "Recurring" })] })] }), _jsx("div", { className: "form-actions", children: _jsxs("button", { className: "primary-btn", disabled: saving, children: [_jsx(Save, { size: 15 }), " ", saving ? "Saving…" : "Create expense"] }) })] }); }
+-function PaymentForm({ data, onDone, activity }) { const [rid, setRid] = useState(data.residents[0]?.id || ""); const [amount, setAmount] = useState(""); const [date, setDate] = useState(new Date().toISOString().slice(0, 10)); const [note, setNote] = useState(""); return _jsxs("form", { className: "form-grid", onSubmit: async (e) => { e.preventDefault(); const id = await recordPayment({ residentId: rid, amountCents: cents(amount), date, note: sanitize(note) }); await activity("payment.recorded", id, data.residents.find((r) => r.id === rid)?.name); onDone(); }, children: [_jsxs("label", { children: ["Resident", _jsx("select", { value: rid, onChange: e => setRid(e.target.value), children: data.residents.filter((r) => r.active).map((r) => _jsx("option", { value: r.id, children: r.name }, r.id)) })] }), _jsxs("label", { children: ["Amount (\u20B9)", _jsx("input", { required: true, min: "0.01", step: "0.01", type: "number", value: amount, onChange: e => setAmount(e.target.value) })] }), _jsxs("label", { children: ["Date", _jsx("input", { type: "date", value: date, onChange: e => setDate(e.target.value) })] }), _jsxs("label", { children: ["Note", _jsx("textarea", { value: note, onChange: e => setNote(e.target.value) })] }), _jsx("div", { className: "form-actions", children: _jsxs("button", { className: "primary-btn", children: [_jsx(Save, { size: 15 }), " Record payment"] }) })] }); }
+-function ResidentForm({ data, onDone, activity }) { const [name, setName] = useState(""); const [flat, setFlat] = useState(data.flats[0]?.id || ""); const [shares, setShares] = useState("1"); const [phone, setPhone] = useState(""); return _jsxs("form", { className: "form-grid", onSubmit: async (e) => { e.preventDefault(); const id = await saveDoc("residents", undefined, { name: sanitize(name), flatId: flat, shares: Number(shares), phone: sanitize(phone), active: true }); await activity("resident.created", id, name); onDone(); }, children: [_jsxs("label", { children: ["Name", _jsx("input", { required: true, value: name, onChange: e => setName(e.target.value) })] }), _jsxs("label", { children: ["Flat", _jsx("select", { value: flat, onChange: e => setFlat(e.target.value), children: data.flats.filter((f) => f.active).map((f) => _jsx("option", { value: f.id, children: f.number }, f.id)) })] }), _jsxs("label", { children: ["Shares", _jsx("input", { min: "0.01", step: "0.01", type: "number", value: shares, onChange: e => setShares(e.target.value) })] }), _jsxs("label", { children: ["Phone", _jsx("input", { value: phone, onChange: e => setPhone(e.target.value) })] }), _jsx("div", { className: "form-actions", children: _jsxs("button", { className: "primary-btn", children: [_jsx(UserPlus, { size: 15 }), " Add resident"] }) })] }); }
+-function RecurringForm({ data, onDone }) { const [title, setTitle] = useState(""); const [amount, setAmount] = useState(""); const [cat, setCat] = useState(data.categories[0]?.id || ""); const [payer, setPayer] = useState(data.residents[0]?.id || ""); const [day, setDay] = useState("1"); return _jsxs("form", { className: "form-grid", onSubmit: async (e) => { e.preventDefault(); const id = await saveDoc("recurringExpenses", undefined, { title: sanitize(title), amountCents: cents(amount), categoryId: cat, payerId: payer, dayOfMonth: Math.min(28, Math.max(1, Number(day))), active: true, splitMode: "shares", startMonth: currentMonth() }); onDone(); }, children: [_jsxs("label", { children: ["Title", _jsx("input", { required: true, value: title, onChange: e => setTitle(e.target.value) })] }), _jsxs("label", { children: ["Amount", _jsx("input", { type: "number", step: "0.01", value: amount, onChange: e => setAmount(e.target.value) })] }), _jsxs("label", { children: ["Day of month", _jsx("input", { type: "number", min: "1", max: "28", value: day, onChange: e => setDay(e.target.value) })] }), _jsxs("label", { children: ["Category", _jsx("select", { value: cat, onChange: e => setCat(e.target.value), children: data.categories.map((c) => _jsx("option", { value: c.id, children: c.name }, c.id)) })] }), _jsxs("label", { children: ["Payer", _jsx("select", { value: payer, onChange: e => setPayer(e.target.value), children: data.residents.filter((r) => r.active).map((r) => _jsx("option", { value: r.id, children: r.name }, r.id)) })] }), _jsx("div", { className: "form-actions", children: _jsxs("button", { className: "primary-btn", children: [_jsx(Repeat2Icon, {}), " Create recurring"] }) })] }); }
+-function Repeat2Icon() { return _jsx(RefreshCw, { size: 15 }); }
+diff --git a/src/pages/AdminDashboard.tsx b/src/pages/AdminDashboard.tsx
+index a69ca82..98bc9a6 100644
+--- a/src/pages/AdminDashboard.tsx
++++ b/src/pages/AdminDashboard.tsx
+@@ -17,7 +17,7 @@ export function AdminDashboard({ section="overview" }: { section?: string }) {
+   const [modal,setModal]=useState<string|null>(null);
+   const [saving,setSaving]=useState(false);
+   const [toast,setToast]=useState("");
+-  if (!user || !isAdmin) return <Navigate to="/admin/login" replace/>;
++  if (!user || !isAdmin) return <Navigate to="/login" replace/>;
+ 
+   const residentMap = new Map(data.residents.map(r=>[r.id,r]));
+   const categoryMap = new Map(data.categories.map(c=>[c.id,c.name]));
+diff --git a/src/pages/Login.js b/src/pages/Login.js
+deleted file mode 100644
+index d271d7e..0000000
+--- a/src/pages/Login.js
++++ /dev/null
+@@ -1,30 +0,0 @@
+-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+-import { useState } from "react";
+-import { Navigate, useNavigate } from "react-router-dom";
+-import { Google } from "lucide-react";
+-import { BorderBeam } from "border-beam";
+-import { useApp } from "../context/AppContext";
+-import { ADMIN_EMAIL } from "../lib/firebase";
+-export function AdminLogin() {
+-    const { user, isAdmin, login } = useApp();
+-    const navigate = useNavigate();
+-    const [busy, setBusy] = useState(false);
+-    const [message, setMessage] = useState("");
+-    if (user && isAdmin)
+-        return _jsx(Navigate, { to: "/admin/overview", replace: true });
+-    const go = async () => {
+-        setBusy(true);
+-        setMessage("");
+-        try {
+-            await login();
+-            navigate("/admin/overview");
+-        }
+-        catch (e) {
+-            setMessage(e?.code === "auth/popup-closed-by-user" ? "Sign-in cancelled." : (e?.message || "Sign-in failed."));
+-        }
+-        finally {
+-            setBusy(false);
+-        }
+-    };
+-    return _jsx("div", { className: "login-page", children: _jsx(BorderBeam, { active: true, size: "md", colorVariant: "mono", strength: 0.25, children: _jsxs("div", { className: "login-card", children: [_jsxs("div", { className: "brand large", children: [_jsx("div", { className: "brand-mark", children: "P" }), _jsxs("div", { children: [_jsx("div", { className: "brand-name", children: "ParkLedger" }), _jsx("div", { className: "brand-kicker", children: "Secure admin access" })] })] }), _jsxs("div", { className: "login-copy", children: [_jsx("div", { className: "eyebrow", children: "Protected area" }), _jsx("h1", { children: "Manage the ledger." }), _jsx("p", { children: "Google Authentication is required. Firestore rules independently enforce administrator write access." })] }), _jsxs("button", { className: "primary-btn wide", onClick: go, disabled: busy, children: [_jsx(Google, { size: 17 }), busy ? "Opening Google…" : "Continue with Google"] }), _jsxs("div", { className: "login-note", children: ["Authorised administrator: ", _jsx("strong", { children: ADMIN_EMAIL })] }), message && _jsx("div", { className: "notice error", children: message }), _jsx("button", { className: "text-btn", onClick: () => navigate("/"), children: "\u2190 Back to public dashboard" })] }) }) });
+-}
+diff --git a/src/pages/Login.tsx b/src/pages/Login.tsx
+index 9389560..f0d0c99 100644
+--- a/src/pages/Login.tsx
++++ b/src/pages/Login.tsx
+@@ -5,12 +5,22 @@ import { BorderBeam } from "border-beam";
+ import { useApp } from "../context/AppContext";
+ import { ADMIN_EMAIL } from "../lib/firebase";
+ 
++const AUTH_MESSAGES: Record<string,string> = {
++  "auth/unauthorized-domain": "This domain is not authorised for Firebase sign-in. Add it under Firebase Authentication > Settings > Authorized domains.",
++  "auth/popup-blocked": "The sign-in popup was blocked by the browser. Allow popups for this site and try again.",
++  "auth/popup-closed-by-user": "Sign-in cancelled.",
++  "auth/cancelled-popup-request": "Sign-in cancelled.",
++  "auth/operation-not-allowed": "Google sign-in is not enabled for this Firebase project.",
++  "auth/invalid-api-key": "The Firebase API key is invalid or missing from this build."
++};
++const authMessage = (e:any) => AUTH_MESSAGES[e?.code] || e?.message || "Sign-in failed.";
++
+ export function AdminLogin() {
+   const { user, isAdmin, login } = useApp();
+   const navigate = useNavigate();
+   const [busy,setBusy]=useState(false);
+   const [message,setMessage]=useState("");
+-  if (user && isAdmin) return <Navigate to="/admin/overview" replace/>;
++  if (user && isAdmin) return <Navigate to="/overview" replace/>;
+ 
+   const go = async () => {
+     setBusy(true); setMessage("");
+@@ -26,11 +36,11 @@ export function AdminLogin() {
+ 
+       // Auth state is updated asynchronously. Navigate only after the popup
+       // has returned an explicitly verified administrator account.
+-      navigate("/admin/overview", { replace: true });
++      navigate("/overview", { replace: true });
+     } catch (e:any) {
+-      setMessage(e?.code === "auth/popup-closed-by-user" ? "Sign-in cancelled." : (e?.message || "Sign-in failed."));
++      setMessage(authMessage(e));
+     } finally { setBusy(false); }
+   };
+ 
+-  return <div className="login-page"><BorderBeam active={true} size="md" colorVariant="mono" strength={0.25}><div className="login-card"><div className="brand large"><div className="brand-mark">P</div><div><div className="brand-name">ParkLedger</div><div className="brand-kicker">Secure admin access</div></div></div><div className="login-copy"><div className="eyebrow">Protected area</div><h1>Manage the ledger.</h1><p>Google Authentication is required. Firestore rules independently enforce administrator write access.</p></div><button className="primary-btn wide" onClick={go} disabled={busy}><Chrome size={17}/>{busy ? "Opening Google…" : "Continue with Google"}</button><div className="login-note">Authorised administrator: <strong>{ADMIN_EMAIL}</strong></div>{message && <div className="notice error">{message}</div>}<button className="text-btn" onClick={()=>navigate("/")}>← Back to public dashboard</button></div></BorderBeam></div>;
++  return <div className="login-page"><BorderBeam active={true} size="md" colorVariant="mono" strength={0.25}><div className="login-card"><div className="brand large"><div className="brand-mark">P</div><div><div className="brand-name">ParkLedger</div><div className="brand-kicker">Secure admin access</div></div></div><div className="login-copy"><div className="eyebrow">Protected area</div><h1>Manage the ledger.</h1><p>Google Authentication is required. Firestore rules independently enforce administrator write access.</p></div><button className="primary-btn wide" onClick={go} disabled={busy}><Chrome size={17}/>{busy ? "Opening Google…" : "Continue with Google"}</button><div className="login-note">Authorised administrator: <strong>{ADMIN_EMAIL}</strong></div>{message && <div className="notice error">{message}</div>}<button className="text-btn" onClick={()=>window.location.assign(import.meta.env.BASE_URL)}>← Back to public dashboard</button></div></BorderBeam></div>;
+ }
+\ No newline at end of file
+diff --git a/src/pages/PublicDashboard.js b/src/pages/PublicDashboard.js
+deleted file mode 100644
+index 579ddf5..0000000
+--- a/src/pages/PublicDashboard.js
++++ /dev/null
+@@ -1,110 +0,0 @@
+-import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
+-import { useMemo, useState } from "react";
+-import * as XLSX from "xlsx";
+-import { jsPDF } from "jspdf";
+-import { ArrowUpRight, CalendarDays, CheckCircle2, CircleDollarSign, Download, Search, Wallet, Receipt, FileText } from "lucide-react";
+-import { useNavigate } from "react-router-dom";
+-import { useApp } from "../context/AppContext";
+-import { money, currentMonth, monthKey, monthLabel, statusFor } from "../lib/utils";
+-import { Metric } from "../components/Metric";
+-import { StatusBadge } from "../components/StatusBadge";
+-import { MonthlyBar, CategoryDonut } from "../components/Charts";
+-export function PublicDashboard({ section = "overview" }) {
+-    const { data, login, error } = useApp();
+-    const navigate = useNavigate();
+-    const [month, setMonth] = useState(currentMonth());
+-    const [query, setQuery] = useState("");
+-    const [category, setCategory] = useState("all");
+-    const categoryMap = useMemo(() => new Map(data.categories.map(c => [c.id, c.name])), [data.categories]);
+-    const residentMap = useMemo(() => new Map(data.residents.map(r => [r.id, r])), [data.residents]);
+-    const paidByResident = useMemo(() => {
+-        const m = new Map();
+-        // The upfront payer is automatically credited for their own allocated share.
+-        data.expenses.forEach(e => {
+-            const ownShare = Number(e.split?.[e.payerId] ?? 0);
+-            if (ownShare)
+-                m.set(e.payerId, (m.get(e.payerId) || 0) + ownShare);
+-        });
+-        data.payments.forEach(p => m.set(p.residentId, (m.get(p.residentId) || 0) + p.amountCents));
+-        return m;
+-    }, [data.expenses, data.payments]);
+-    const expenseSplits = useMemo(() => {
+-        const m = new Map();
+-        data.expenses.forEach(e => Object.entries(e.split ?? {}).forEach(([rid, amount]) => m.set(rid, (m.get(rid) || 0) + Number(amount))));
+-        return m;
+-    }, [data.expenses]);
+-    const stats = useMemo(() => {
+-        const total = data.expenses.reduce((a, e) => a + e.amountCents, 0);
+-        const monthly = data.expenses.filter(e => monthKey(e.date) === month).reduce((a, e) => a + e.amountCents, 0);
+-        const owed = [...expenseSplits.values()].reduce((a, v) => a + v, 0);
+-        const paid = data.payments.reduce((a, p) => a + p.amountCents, 0);
+-        return { total, monthly, owed, paid, pending: Math.max(0, owed - paid) };
+-    }, [data.expenses, data.payments, expenseSplits, month]);
+-    const dues = data.residents.filter(r => r.active).map(r => {
+-        const owed = expenseSplits.get(r.id) || 0;
+-        const paid = paidByResident.get(r.id) || 0;
+-        return { r, owed, paid, remaining: Math.max(0, owed - paid), status: statusFor(owed, paid) };
+-    }).sort((a, b) => b.remaining - a.remaining);
+-    const filteredExpenses = data.expenses.filter(e => {
+-        const text = `${e.title} ${e.description || ""} ${categoryMap.get(e.categoryId) || ""} ${residentMap.get(e.payerId)?.name || ""}`.toLowerCase();
+-        return text.includes(query.toLowerCase()) && (category === "all" || e.categoryId === category) && (month === "all" || monthKey(e.date) === month);
+-    }).sort((a, b) => b.date.localeCompare(a.date));
+-    const monthly = useMemo(() => {
+-        const map = new Map();
+-        data.expenses.forEach(e => map.set(monthKey(e.date), (map.get(monthKey(e.date)) || 0) + e.amountCents));
+-        return [...map.entries()].sort().slice(-8).map(([m, amount]) => ({ month: monthLabel(m), amount }));
+-    }, [data.expenses]);
+-    const cats = useMemo(() => {
+-        const map = new Map();
+-        data.expenses.forEach(e => map.set(categoryMap.get(e.categoryId) || "Uncategorised", (map.get(categoryMap.get(e.categoryId) || "Uncategorised") || 0) + e.amountCents));
+-        return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([name, amount]) => ({ name, amount }));
+-    }, [data.expenses, categoryMap]);
+-    const exportCsv = () => {
+-        const rows = [["Date", "Expense", "Category", "Payer", "Amount", "Type"], ...filteredExpenses.map(e => [
+-                e.date, e.title, categoryMap.get(e.categoryId) || "", residentMap.get(e.payerId)?.name || "", String(e.amountCents / 100), e.type
+-            ])];
+-        const csv = rows.map(r => r.map(v => `"${String(v).replaceAll('"', '""')}"`).join(",")).join("\n");
+-        const a = document.createElement("a");
+-        a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+-        a.download = "parkledger-public-ledger.csv";
+-        a.click();
+-    };
+-    const exportXlsx = () => {
+-        const rows = filteredExpenses.map(e => ({
+-            Date: e.date, Expense: e.title, Category: categoryMap.get(e.categoryId) || "",
+-            Payer: residentMap.get(e.payerId)?.name || "", Amount_INR: e.amountCents / 100, Type: e.type
+-        }));
+-        const wb = XLSX.utils.book_new();
+-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Expenses");
+-        XLSX.writeFile(wb, "parkledger-public-ledger.xlsx");
+-    };
+-    const exportPdf = () => {
+-        const doc = new jsPDF({ orientation: "landscape" });
+-        doc.setFontSize(18);
+-        doc.text("ParkLedger Public Ledger", 14, 16);
+-        doc.setFontSize(9);
+-        let y = 25;
+-        doc.text("Date", 14, y);
+-        doc.text("Expense", 40, y);
+-        doc.text("Category", 130, y);
+-        doc.text("Payer", 180, y);
+-        doc.text("Amount", 250, y);
+-        y += 6;
+-        filteredExpenses.slice(0, 35).forEach(e => { doc.text(e.date, 14, y); doc.text(e.title.slice(0, 42), 40, y); doc.text((categoryMap.get(e.categoryId) || "").slice(0, 22), 130, y); doc.text((residentMap.get(e.payerId)?.name || "").slice(0, 22), 180, y); doc.text(money(e.amountCents), 250, y); y += 6; });
+-        doc.save("parkledger-public-ledger.pdf");
+-    };
+-    return (_jsxs(_Fragment, { children: [_jsxs("div", { className: "page-header", children: [_jsxs("div", { children: [_jsx("div", { className: "eyebrow", children: "Shared parking ledger" }), _jsx("h1", { children: "Know what the lot costs." }), _jsx("p", { children: "Transparent, read-only figures for residents and stakeholders." })] }), _jsxs("div", { className: "header-actions", children: [_jsxs("div", { className: "header-actions", children: [_jsxs("button", { className: "secondary-btn", onClick: exportCsv, children: [_jsx(Download, { size: 16 }), " CSV"] }), _jsx("button", { className: "secondary-btn", onClick: exportXlsx, children: "Excel" }), _jsx("button", { className: "secondary-btn", onClick: exportPdf, children: "PDF" })] }), _jsxs("button", { className: "primary-btn", onClick: login, children: ["Admin access ", _jsx(ArrowUpRight, { size: 16 })] })] })] }), error && _jsxs("div", { className: "notice error", children: [_jsx("strong", { children: "Live data unavailable." }), " ", error] }), section === "overview" && _jsxs(_Fragment, { children: [_jsxs("div", { className: "metrics-grid", children: [_jsx(Metric, { label: "Total expenses", value: money(stats.total), note: `${data.expenses.length} records`, icon: _jsx(Wallet, { size: 16 }) }), _jsx(Metric, { label: "This month", value: money(stats.monthly), note: monthLabel(month), icon: _jsx(CalendarDays, { size: 16 }) }), _jsx(Metric, { label: "Collected", value: money(stats.paid), note: `${stats.owed ? Math.round((stats.paid / stats.owed) * 100) : 0}% of allocated`, icon: _jsx(CheckCircle2, { size: 16 }) }), _jsx(Metric, { label: "Outstanding", value: money(stats.pending), note: `${dues.filter(d => d.remaining > 0).length} people with dues`, icon: _jsx(CircleDollarSign, { size: 16 }) })] }), _jsxs("div", { className: "dashboard-grid", children: [_jsxs("section", { className: "panel span-2", children: [_jsxs("div", { className: "panel-head", children: [_jsxs("div", { children: [_jsx("h2", { children: "Spending over time" }), _jsx("p", { children: "Latest recorded months" })] }), _jsx("span", { className: "section-tag", children: "INR" })] }), _jsx(MonthlyBar, { data: monthly })] }), _jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "By category" }), _jsx("p", { children: "Where the money goes" })] }) }), cats.length ? _jsx(CategoryDonut, { data: cats }) : _jsx(Empty, { text: "No expenses yet." })] }), _jsxs("section", { className: "panel span-2", children: [_jsxs("div", { className: "panel-head", children: [_jsxs("div", { children: [_jsx("h2", { children: "Current dues" }), _jsx("p", { children: "Allocated shares against recorded payments" })] }), _jsxs("button", { className: "text-btn", onClick: () => navigate("/dues"), children: ["View all ", _jsx(ArrowUpRight, { size: 14 })] })] }), _jsx(DuesTable, { dues: dues.slice(0, 6) })] }), _jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Recent activity" }), _jsx("p", { children: "Latest ledger entries" })] }) }), _jsx("div", { className: "activity-list", children: data.expenses.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6).map(e => _jsxs("div", { className: "activity-row", children: [_jsx("div", { className: "activity-icon", children: _jsx(ReceiptIcon, {}) }), _jsxs("div", { children: [_jsx("strong", { children: e.title }), _jsxs("small", { children: [e.date, " \u00B7 ", categoryMap.get(e.categoryId) || "Uncategorised"] })] }), _jsx("b", { children: money(e.amountCents) })] }, e.id)) })] })] })] }), section === "dues" && _jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Current dues" }), _jsx("p", { children: "Person-wise balances with payment status" })] }) }), _jsx(DuesTable, { dues: dues })] }), section === "expenses" && _jsx("section", { className: "panel", children: _jsx(ExpenseLedger, { expenses: filteredExpenses, categories: data.categories, categoryMap: categoryMap, residentMap: residentMap, query: query, setQuery: setQuery, category: category, setCategory: setCategory, month: month, setMonth: setMonth }) }), section === "payments" && _jsx("section", { className: "panel", children: _jsx(PaymentLedger, { payments: data.payments, residents: residentMap }) }), section === "balances" && _jsx("section", { className: "panel", children: _jsx(DuesTable, { dues: dues }) }), section === "history" && _jsx("section", { className: "panel", children: _jsx(History, { data: monthly }) }), section === "analytics" && _jsxs("div", { className: "dashboard-grid", children: [_jsxs("section", { className: "panel span-2", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Monthly trend" }), _jsx("p", { children: "Recorded spending" })] }) }), _jsx(MonthlyBar, { data: monthly })] }), _jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-head", children: _jsxs("div", { children: [_jsx("h2", { children: "Category mix" }), _jsx("p", { children: "All time" })] }) }), _jsx(CategoryDonut, { data: cats })] })] }), section === "reports" && _jsx(Reports, { onExport: exportCsv })] }));
+-}
+-function DuesTable({ dues }) {
+-    return _jsx("div", { className: "table-wrap", children: _jsxs("table", { children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: "Resident" }), _jsx("th", { children: "Allocated" }), _jsx("th", { children: "Paid" }), _jsx("th", { children: "Remaining" }), _jsx("th", { children: "Status" })] }) }), _jsx("tbody", { children: dues.map(d => _jsxs("tr", { children: [_jsxs("td", { children: [_jsx("strong", { children: d.r.name }), _jsxs("small", { children: ["Flat ", d.r.flatId] })] }), _jsx("td", { children: money(d.owed) }), _jsx("td", { children: money(d.paid) }), _jsx("td", { className: d.remaining ? "danger-text" : "", children: money(d.remaining) }), _jsx("td", { children: _jsx(StatusBadge, { status: d.status }) })] }, d.r.id)) })] }) });
+-}
+-function ExpenseLedger({ expenses, categories, categoryMap, residentMap, query, setQuery, category, setCategory, month, setMonth }) {
+-    const months = [...new Set(expenses.map((e) => monthKey(e.date)))].sort().reverse();
+-    return _jsxs(_Fragment, { children: [_jsxs("div", { className: "filters", children: [_jsxs("label", { className: "search-box", children: [_jsx(Search, { size: 16 }), _jsx("input", { placeholder: "Search expenses, people, categories\u2026", value: query, onChange: e => setQuery(e.target.value) })] }), _jsxs("select", { value: month, onChange: e => setMonth(e.target.value), children: [_jsx("option", { value: "all", children: "All months" }), months.map((m) => _jsx("option", { value: m, children: monthLabel(m) }, m))] }), _jsxs("select", { value: category, onChange: e => setCategory(e.target.value), children: [_jsx("option", { value: "all", children: "All categories" }), categories.map((c) => _jsx("option", { value: c.id, children: c.name }, c.id))] })] }), _jsx("div", { className: "table-wrap", children: _jsxs("table", { children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: "Date" }), _jsx("th", { children: "Expense" }), _jsx("th", { children: "Category" }), _jsx("th", { children: "Payer" }), _jsx("th", { children: "Type" }), _jsx("th", { children: "Amount" })] }) }), _jsx("tbody", { children: expenses.map((e) => _jsxs("tr", { children: [_jsx("td", { children: e.date }), _jsxs("td", { children: [_jsx("strong", { children: e.title }), _jsx("small", { children: e.description || "No notes" })] }), _jsx("td", { children: categoryMap.get(e.categoryId) || "Uncategorised" }), _jsx("td", { children: residentMap.get(e.payerId)?.name || "Unknown" }), _jsx("td", { children: _jsx("span", { className: "section-tag", children: e.type }) }), _jsx("td", { children: _jsx("strong", { children: money(e.amountCents) }) })] }, e.id)) })] }) })] });
+-}
+-function PaymentLedger({ payments, residents }) { return _jsx("div", { className: "table-wrap", children: _jsxs("table", { children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: "Date" }), _jsx("th", { children: "Resident" }), _jsx("th", { children: "Amount" }), _jsx("th", { children: "Note" })] }) }), _jsx("tbody", { children: payments.slice().sort((a, b) => b.date.localeCompare(a.date)).map((p) => _jsxs("tr", { children: [_jsx("td", { children: p.date }), _jsx("td", { children: residents.get(p.residentId)?.name || "Unknown" }), _jsx("td", { children: _jsx("strong", { children: money(p.amountCents) }) }), _jsx("td", { children: p.note || "—" })] }, p.id)) })] }) }); }
+-function History({ data }) { return _jsx("div", { className: "history-grid", children: data.map(x => _jsxs("div", { className: "history-item", children: [_jsx("span", { children: x.month }), _jsx("strong", { children: money(x.amount) })] }, x.month)) }); }
+-function Reports({ onExport }) { return _jsx("div", { className: "report-grid", children: ["Monthly report", "Yearly overview", "Expense report", "Payment report", "Outstanding dues", "Resident report"].map(x => _jsxs("div", { className: "report-card", children: [_jsx(FileIcon, {}), _jsx("h3", { children: x }), _jsx("p", { children: "Generate from the live Firestore ledger." }), _jsxs("button", { className: "secondary-btn", onClick: onExport, children: ["Export CSV ", _jsx(Download, { size: 14 })] })] }, x)) }); }
+-function Empty({ text }) { return _jsx("div", { className: "empty", children: text }); }
+-function ReceiptIcon() { return _jsx(Receipt, { size: 17 }); }
+-function FileIcon() { return _jsx(FileText, { size: 20 }); }
+diff --git a/src/pages/PublicDashboard.tsx b/src/pages/PublicDashboard.tsx
+index 7d50edb..dc254bf 100644
+--- a/src/pages/PublicDashboard.tsx
++++ b/src/pages/PublicDashboard.tsx
+@@ -10,7 +10,8 @@ import { StatusBadge } from "../components/StatusBadge";
+ import { MonthlyBar, CategoryDonut } from "../components/Charts";
+ 
+ export function PublicDashboard({ section="overview" }: { section?: string }) {
+-  const { data, login, error } = useApp();
++  const { data, error } = useApp();
++  const goToAdmin = () => window.location.assign(`${import.meta.env.BASE_URL}admin.html#/login`);
+   const navigate = useNavigate();
+   const [month, setMonth] = useState(currentMonth());
+   const [query, setQuery] = useState("");
+@@ -92,7 +93,7 @@ export function PublicDashboard({ section="overview" }: { section?: string }) {
+     <>
+       <div className="page-header">
+         <div><div className="eyebrow">Shared parking ledger</div><h1>Know what the lot costs.</h1><p>Transparent, read-only figures for residents and stakeholders.</p></div>
+-        <div className="header-actions"><div className="header-actions"><button className="secondary-btn" onClick={exportCsv}><Download size={16}/> CSV</button><button className="secondary-btn" onClick={exportXlsx}>Excel</button><button className="secondary-btn" onClick={exportPdf}>PDF</button></div><button className="primary-btn" onClick={login}>Admin access <ArrowUpRight size={16}/></button></div>
++        <div className="header-actions"><div className="header-actions"><button className="secondary-btn" onClick={exportCsv}><Download size={16}/> CSV</button><button className="secondary-btn" onClick={exportXlsx}>Excel</button><button className="secondary-btn" onClick={exportPdf}>PDF</button></div><button className="primary-btn" onClick={goToAdmin}>Admin access <ArrowUpRight size={16}/></button></div>
+       </div>
+       {error && <div className="notice error"><strong>Live data unavailable.</strong> {error}</div>}
+       {section==="overview" && <>
+diff --git a/src/types.js b/src/types.js
+deleted file mode 100644
+index cb0ff5c..0000000
+--- a/src/types.js
++++ /dev/null
+@@ -1 +0,0 @@
+-export {};
+diff --git a/tsconfig.app.json b/tsconfig.app.json
+index a5b8d20..b9629c8 100644
+--- a/tsconfig.app.json
++++ b/tsconfig.app.json
+@@ -5,6 +5,7 @@
+     "useDefineForClassFields": true,
+     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+     "allowJs": false,
++    "noEmit": true,
+     "skipLibCheck": true,
+     "esModuleInterop": true,
+     "allowSyntheticDefaultImports": true,
+diff --git a/vite.config.ts b/vite.config.ts
+index b84c576..d8cd84b 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -1,11 +1,22 @@
+ import { defineConfig } from "vite";
+ import react from "@vitejs/plugin-react";
++import { resolve } from "node:path";
+ 
+ export default defineConfig({
+   plugins: [react()],
+   base: process.env.VITE_BASE_PATH || "/",
++  resolve: {
++    // Prefer TypeScript sources over any stray compiled .js siblings.
++    extensions: [".mts", ".ts", ".tsx", ".mjs", ".js", ".jsx", ".json"]
++  },
+   build: {
+     target: "es2022",
+-    sourcemap: true
++    sourcemap: true,
++    rollupOptions: {
++      input: {
++        main: resolve(__dirname, "index.html"),
++        admin: resolve(__dirname, "admin.html")
++      }
++    }
+   }
+ });
+-- 
+2.43.0
+
