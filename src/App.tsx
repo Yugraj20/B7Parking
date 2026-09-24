@@ -28,7 +28,7 @@ function LoginRoute(){const {theme,setTheme}=useTheme(); return <AdminLoginWithT
 function AdminLoginWithTheme({theme,onTheme}:{theme:"light"|"dark";onTheme:(v:"light"|"dark")=>void}){return <div className="login-root"><div className="login-theme"><button className="icon-btn" onClick={()=>onTheme(theme==="dark"?"light":"dark")}>{theme==="dark"?"☼":"☾"}</button></div><AdminLogin/></div>}
 
 export default function App(){
- const basename = import.meta.env.BASE_URL.replace(/\/$/, "") || undefined;
+ const basename = import.meta.env.BASE_URL === "/" ? undefined : import.meta.env.BASE_URL.replace(/\/$/, "");
  return <BrowserRouter basename={basename}><AppProvider><ThemeHost><Routes>
    <Route path="/" element={<PublicRoute section="overview"/>}/>
    {["dues","expenses","payments","balances","history","analytics","reports"].map(x=><Route key={x} path={`/${x}`} element={<PublicRoute section={x}/>}/>)}
