@@ -1,148 +1,28 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
-import { ArrowUpRight, CalendarDays, CheckCircle2, CircleDollarSign, Download, Search, Users, Wallet, Receipt, FileText } from "lucide-react";
+import { ArrowUpRight, CalendarDays, CheckCircle2, CircleDollarSign, Download, Search, Wallet, Receipt, FileText } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../context/AppContext";
-import { money, currentMonth, monthKey, monthLabel, statusFor } from "../lib/utils";
-import { Metric } from "../components/Metric";
-import { StatusBadge } from "../components/StatusBadge";
-import { MonthlyBar, CategoryDonut } from "../components/Charts";
-
-export function PublicDashboard({ section="overview" }: { section?: string }) {
-  const { data, error } = useApp();
-  const goToAdmin = () => window.location.assign(`${import.meta.env.BASE_URL}admin.html#/login`);
-  const navigate = useNavigate();
-  const [month, setMonth] = useState(currentMonth());
-  const [query, setQuery] = useState("");
-  const [category, setCategory] = useState("all");
-
-  const categoryMap = useMemo(() => new Map(data.categories.map(c => [c.id,c.name])), [data.categories]);
-  const residentMap = useMemo(() => new Map(data.residents.map(r => [r.id,r])), [data.residents]);
-  const paidByResident = useMemo(() => {
-    const m = new Map<string,number>();
-    // The upfront payer is automatically credited for their own allocated share.
-    data.expenses.forEach(e => {
-      const ownShare = Number(e.split?.[e.payerId] ?? 0);
-      if (ownShare) m.set(e.payerId, (m.get(e.payerId)||0) + ownShare);
-    });
-    data.payments.forEach(p => m.set(p.residentId, (m.get(p.residentId)||0)+p.amountCents));
-    return m;
-  }, [data.expenses, data.payments]);
-
-  const expenseSplits = useMemo(() => {
-    const m = new Map<string, number>();
-    data.expenses.forEach(e => Object.entries(e.split ?? {}).forEach(([rid,amount]) => m.set(rid,(m.get(rid)||0)+Number(amount))));
-    return m;
-  }, [data.expenses]);
-
-  const stats = useMemo(() => {
-    const total = data.expenses.reduce((a,e)=>a+e.amountCents,0);
-    const monthly = data.expenses.filter(e=>monthKey(e.date)===month).reduce((a,e)=>a+e.amountCents,0);
-    const owed = [...expenseSplits.values()].reduce((a,v)=>a+v,0);
-    const paid = data.payments.reduce((a,p)=>a+p.amountCents,0);
-    return {total,monthly,owed,paid,pending:Math.max(0,owed-paid)};
-  }, [data.expenses,data.payments,expenseSplits,month]);
-
-  const dues = data.residents.filter(r=>r.active).map(r => {
-    const owed = expenseSplits.get(r.id)||0;
-    const paid = paidByResident.get(r.id)||0;
-    return {r,owed,paid,remaining:Math.max(0,owed-paid),status:statusFor(owed,paid)};
-  }).sort((a,b)=>b.remaining-a.remaining);
-
-  const filteredExpenses = data.expenses.filter(e => {
-    const text = `${e.title} ${e.description||""} ${categoryMap.get(e.categoryId)||""} ${residentMap.get(e.payerId)?.name||""}`.toLowerCase();
-    return text.includes(query.toLowerCase()) && (category==="all" || e.categoryId===category) && (month==="all" || monthKey(e.date)===month);
-  }).sort((a,b)=>b.date.localeCompare(a.date));
-
-  const monthly = useMemo(() => {
-    const map = new Map<string,number>();
-    data.expenses.forEach(e => map.set(monthKey(e.date),(map.get(monthKey(e.date))||0)+e.amountCents));
-    return [...map.entries()].sort().slice(-8).map(([m,amount])=>({month:monthLabel(m),amount}));
-  }, [data.expenses]);
-
-  const cats = useMemo(() => {
-    const map = new Map<string,number>();
-    data.expenses.forEach(e => map.set(categoryMap.get(e.categoryId)||"Uncategorised",(map.get(categoryMap.get(e.categoryId)||"Uncategorised")||0)+e.amountCents));
-    return [...map.entries()].sort((a,b)=>b[1]-a[1]).slice(0,6).map(([name,amount])=>({name,amount}));
-  }, [data.expenses,categoryMap]);
-
-  const exportCsv = () => {
-    const rows = [["Date","Expense","Category","Payer","Amount","Type"], ...filteredExpenses.map(e=>[
-      e.date,e.title,categoryMap.get(e.categoryId)||"",residentMap.get(e.payerId)?.name||"",String(e.amountCents/100),e.type
-    ])];
-    const csv = rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(",")).join("\n");
-    const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"})); a.download="parkledger-public-ledger.csv"; a.click();
-  };
-  const exportXlsx = () => {
-    const rows = filteredExpenses.map(e => ({
-      Date:e.date, Expense:e.title, Category:categoryMap.get(e.categoryId)||"",
-      Payer:residentMap.get(e.payerId)?.name||"", Amount_INR:e.amountCents/100, Type:e.type
-    }));
-    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),"Expenses");
-    XLSX.writeFile(wb,"parkledger-public-ledger.xlsx");
-  };
-  const exportPdf = () => {
-    const doc=new jsPDF({orientation:"landscape"}); doc.setFontSize(18); doc.text("ParkLedger Public Ledger",14,16);
-    doc.setFontSize(9); let y=25; doc.text("Date",14,y); doc.text("Expense",40,y); doc.text("Category",130,y); doc.text("Payer",180,y); doc.text("Amount",250,y); y+=6;
-    filteredExpenses.slice(0,35).forEach(e=>{doc.text(e.date,14,y);doc.text(e.title.slice(0,42),40,y);doc.text((categoryMap.get(e.categoryId)||"").slice(0,22),130,y);doc.text((residentMap.get(e.payerId)?.name||"").slice(0,22),180,y);doc.text(money(e.amountCents),250,y);y+=6});
-    doc.save("parkledger-public-ledger.pdf");
-  };
-
-  return (
-    <>
-      <div className="page-header">
-        <div><div className="eyebrow">Shared parking ledger</div><h1>Know what the lot costs.</h1><p>Transparent, read-only figures for residents and stakeholders.</p></div>
-        <div className="header-actions"><div className="header-actions"><button className="secondary-btn" onClick={exportCsv}><Download size={16}/> CSV</button><button className="secondary-btn" onClick={exportXlsx}>Excel</button><button className="secondary-btn" onClick={exportPdf}>PDF</button></div><button className="primary-btn" onClick={goToAdmin}>Admin access <ArrowUpRight size={16}/></button></div>
-      </div>
-      {error && <div className="notice error"><strong>Live data unavailable.</strong> {error}</div>}
-      {section==="overview" && <>
-        <div className="metrics-grid">
-          <Metric label="Total expenses" value={money(stats.total)} note={`${data.expenses.length} records`} icon={<Wallet size={16}/>} />
-          <Metric label="This month" value={money(stats.monthly)} note={monthLabel(month)} icon={<CalendarDays size={16}/>} />
-          <Metric label="Collected" value={money(stats.paid)} note={`${stats.owed ? Math.round((stats.paid/stats.owed)*100) : 0}% of allocated`} icon={<CheckCircle2 size={16}/>} />
-          <Metric label="Outstanding" value={money(stats.pending)} note={`${dues.filter(d=>d.remaining>0).length} people with dues`} icon={<CircleDollarSign size={16}/>} />
-        </div>
-        <div className="dashboard-grid">
-          <section className="panel span-2">
-            <div className="panel-head"><div><h2>Spending over time</h2><p>Latest recorded months</p></div><span className="section-tag">INR</span></div>
-            <MonthlyBar data={monthly}/>
-          </section>
-          <section className="panel">
-            <div className="panel-head"><div><h2>By category</h2><p>Where the money goes</p></div></div>
-            {cats.length ? <CategoryDonut data={cats}/> : <Empty text="No expenses yet."/>}
-          </section>
-          <section className="panel span-2">
-            <div className="panel-head"><div><h2>Current dues</h2><p>Allocated shares against recorded payments</p></div><button className="text-btn" onClick={()=>navigate("/dues")}>View all <ArrowUpRight size={14}/></button></div>
-            <DuesTable dues={dues.slice(0,6)}/>
-          </section>
-          <section className="panel">
-            <div className="panel-head"><div><h2>Recent activity</h2><p>Latest ledger entries</p></div></div>
-            <div className="activity-list">{data.expenses.slice().sort((a,b)=>b.date.localeCompare(a.date)).slice(0,6).map(e=><div className="activity-row" key={e.id}><div className="activity-icon"><ReceiptIcon/></div><div><strong>{e.title}</strong><small>{e.date} · {categoryMap.get(e.categoryId)||"Uncategorised"}</small></div><b>{money(e.amountCents)}</b></div>)}</div>
-          </section>
-        </div>
-      </>}
-      {section==="dues" && <section className="panel"><div className="panel-head"><div><h2>Current dues</h2><p>Person-wise balances with payment status</p></div></div><DuesTable dues={dues}/></section>}
-      {section==="expenses" && <section className="panel"><ExpenseLedger expenses={filteredExpenses} categories={data.categories} categoryMap={categoryMap} residentMap={residentMap} query={query} setQuery={setQuery} category={category} setCategory={setCategory} month={month} setMonth={setMonth}/></section>}
-      {section==="payments" && <section className="panel"><PaymentLedger payments={data.payments} residents={residentMap}/></section>}
-      {section==="balances" && <section className="panel"><DuesTable dues={dues}/></section>}
-      {section==="history" && <section className="panel"><History data={monthly}/></section>}
-      {section==="analytics" && <div className="dashboard-grid"><section className="panel span-2"><div className="panel-head"><div><h2>Monthly trend</h2><p>Recorded spending</p></div></div><MonthlyBar data={monthly}/></section><section className="panel"><div className="panel-head"><div><h2>Category mix</h2><p>All time</p></div></div><CategoryDonut data={cats}/></section></div>}
-      {section==="reports" && <Reports onExport={exportCsv}/>}
-    </>
-  );
-}
-
-function DuesTable({dues}: {dues:{r:any;owed:number;paid:number;remaining:number;status:any}[]}) {
-  return <div className="table-wrap"><table><thead><tr><th>Resident</th><th>Allocated</th><th>Paid</th><th>Remaining</th><th>Status</th></tr></thead><tbody>{dues.map(d=><tr key={d.r.id}><td><strong>{d.r.name}</strong><small>Flat {d.r.flatId}</small></td><td>{money(d.owed)}</td><td>{money(d.paid)}</td><td className={d.remaining ? "danger-text" : ""}>{money(d.remaining)}</td><td><StatusBadge status={d.status}/></td></tr>)}</tbody></table></div>;
-}
-function ExpenseLedger({expenses,categories,categoryMap,residentMap,query,setQuery,category,setCategory,month,setMonth}:any) {
-  const months: string[] = Array.from(new Set<string>(expenses.map((e:any)=>String(monthKey(e.date))))).sort().reverse();
-  return <><div className="filters"><label className="search-box"><Search size={16}/><input placeholder="Search expenses, people, categories…" value={query} onChange={e=>setQuery(e.target.value)}/></label><select value={month} onChange={e=>setMonth(e.target.value)}><option value="all">All months</option>{months.map((m:string)=><option key={m} value={m}>{monthLabel(m)}</option>)}</select><select value={category} onChange={e=>setCategory(e.target.value)}><option value="all">All categories</option>{categories.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div><div className="table-wrap"><table><thead><tr><th>Date</th><th>Expense</th><th>Category</th><th>Payer</th><th>Type</th><th>Amount</th></tr></thead><tbody>{expenses.map((e:any)=><tr key={e.id}><td>{e.date}</td><td><strong>{e.title}</strong><small>{e.description||"No notes"}</small></td><td>{categoryMap.get(e.categoryId)||"Uncategorised"}</td><td>{residentMap.get(e.payerId)?.name||"Unknown"}</td><td><span className="section-tag">{e.type}</span></td><td><strong>{money(e.amountCents)}</strong></td></tr>)}</tbody></table></div></>;
-}
-function PaymentLedger({payments,residents}:any) { return <div className="table-wrap"><table><thead><tr><th>Date</th><th>Resident</th><th>Amount</th><th>Note</th></tr></thead><tbody>{payments.slice().sort((a:any,b:any)=>b.date.localeCompare(a.date)).map((p:any)=><tr key={p.id}><td>{p.date}</td><td>{residents.get(p.residentId)?.name||"Unknown"}</td><td><strong>{money(p.amountCents)}</strong></td><td>{p.note||"—"}</td></tr>)}</tbody></table></div>; }
-function History({data}:{data:{month:string;amount:number}[]}) { return <div className="history-grid">{data.map(x=><div className="history-item" key={x.month}><span>{x.month}</span><strong>{money(x.amount)}</strong></div>)}</div>; }
-function Reports({onExport}:{onExport:()=>void}) { return <div className="report-grid">{["Monthly report","Yearly overview","Expense report","Payment report","Outstanding dues","Resident report"].map(x=><div className="report-card" key={x}><FileIcon/><h3>{x}</h3><p>Generate from the live Firestore ledger.</p><button className="secondary-btn" onClick={onExport}>Export CSV <Download size={14}/></button></div>)}</div>; }
-function Empty({text}:{text:string}) { return <div className="empty">{text}</div>; }
-function ReceiptIcon(){return <Receipt size={17}/>}
-function FileIcon(){return <FileText size={20}/>}
+import { buildLedger, currentBillingPeriod } from "../lib/ledger";
+import { excelSafe, money, monthLabel, monthKey, timestampValue } from "../lib/utils";
+import { Metric } from "../components/Metric"; import { StatusBadge } from "../components/StatusBadge"; import { MonthlyBar, CategoryDonut } from "../components/Charts";
+export function PublicDashboard({section="overview"}:{section?:string}){
+ const {data,error,loading}=useApp(); const navigate=useNavigate(); const [month,setMonth]=useState(currentBillingPeriod(data.settings.monthStartDay)); const [query,setQuery]=useState(""); const [category,setCategory]=useState("all"); const ledger=useMemo(()=>buildLedger(data),[data]);
+ const months=useMemo(()=>Array.from(new Set(data.expenses.map(e=>monthKey(e.date)))).sort().reverse(),[data.expenses]);
+ const filtered=data.expenses.filter(e=>{const text=`${e.title} ${e.description??""} ${ledger.categoryName(e.categoryId)} ${ledger.residentName(e.payerId)}`.toLowerCase();return text.includes(query.toLowerCase())&&(category==='all'||e.categoryId===category)&&(month==='all'||monthKey(e.date)===month)}).sort((a,b)=>b.date.localeCompare(a.date));
+ const property=data.settings.propertyName||"ParkLedger"; useEffect(()=>{document.title=property;},[property]); const monthly=ledger.monthly.slice(-8); const cats=ledger.categories.slice(0,6); const dues=ledger.rows.filter(r=>r.resident.active).sort((a,b)=>b.remainingCents-a.remainingCents);
+ const report=(kind:string,format:'csv'|'xlsx'|'pdf')=>{let rows:Record<string,unknown>[]=[];if(kind==='monthly'){rows=data.expenses.filter(e=>currentBillingPeriod(data.settings.monthStartDay)===monthKey(e.date)).map(e=>({Date:e.date,Expense:e.title,Category:ledger.categoryName(e.categoryId),Payer:ledger.residentName(e.payerId),Amount_INR:e.amountCents/100,Type:e.type}));}else if(kind==='yearly'){const y=new Date().getFullYear();rows=data.expenses.filter(e=>e.date.startsWith(String(y))).map(e=>({Date:e.date,Expense:e.title,Amount_INR:e.amountCents/100,Category:ledger.categoryName(e.categoryId)}));}else if(kind==='expense'){rows=filtered.map(e=>({Date:e.date,Expense:e.title,Category:ledger.categoryName(e.categoryId),Payer:ledger.residentName(e.payerId),Amount_INR:e.amountCents/100,Type:e.type}));}else if(kind==='payment'){rows=data.payments.map(p=>({Date:p.date,Resident:ledger.residentName(p.residentId),Amount_INR:p.amountCents/100,Note:p.note??"",Expense:p.expenseId?data.expenses.find(e=>e.id===p.expenseId)?.title??"":""}));}else if(kind==='outstanding'){rows=ledger.rows.filter(r=>r.remainingCents>0).map(r=>({Resident:r.resident.name,Flat:ledger.flatNumber(r.resident.flatId),Allocated_INR:r.owedCents/100,Paid_INR:r.paidCents/100,Remaining_INR:r.remainingCents/100,Status:r.status}));}else{rows=ledger.rows.map(r=>({Resident:r.resident.name,Flat:ledger.flatNumber(r.resident.flatId),Allocated_INR:r.owedCents/100,Paid_INR:r.paidCents/100,Remaining_INR:r.remainingCents/100,Status:r.status}));}
+ rows=rows.map(r=>Object.fromEntries(Object.entries(r).map(([k,v])=>[k,typeof v==='string'?excelSafe(v):v]))); const name=`parkledger-${kind}.${format}`; if(format==='csv'){const ws=XLSX.utils.json_to_sheet(rows);const csv=XLSX.utils.sheet_to_csv(ws);const blob=new Blob([csv],{type:'text/csv'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),0);}else if(format==='xlsx'){const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Report');XLSX.writeFile(wb,name);}else{const doc=new jsPDF({orientation:'landscape'});let y=16;doc.setFontSize(16);doc.text(`${property} ${kind} report`,14,y);y+=10;doc.setFontSize(8);const headers=Object.keys(rows[0]??{Date:'Date'});doc.text(headers.join(' | ').slice(0,170),14,y);y+=6;for(const row of rows){if(y>195){doc.addPage();y=16;doc.text(headers.join(' | ').slice(0,170),14,y);y+=6;}doc.text(headers.map(h=>String(row[h]??'')).join(' | ').slice(0,170),14,y);y+=5;}doc.save(name);}};
+ return <><div className="page-header"><div><div className="eyebrow">Shared parking ledger</div><h1>{property}</h1><p>Transparent, read-only figures for residents and stakeholders.</p></div><div className="header-actions"><button className="primary-btn" onClick={()=>window.location.assign(`${import.meta.env.BASE_URL}admin.html#/login`)}>Admin access <ArrowUpRight size={16}/></button></div></div>{error&&<div className="notice error"><strong>Live data unavailable.</strong> {error}</div>}{loading&&<div className="notice">Loading ledger…</div>}
+ {section==='overview'&&<><div className="metrics-grid"><Metric label="Total expenses" value={money(ledger.totals.expenseCents)} note={`${data.expenses.length} records`} icon={<Wallet size={16}/>}/><Metric label="This month" value={money(data.expenses.filter(e=>monthKey(e.date)===currentBillingPeriod(data.settings.monthStartDay)).reduce((a,e)=>a+e.amountCents,0))} note={monthLabel(currentBillingPeriod(data.settings.monthStartDay))} icon={<CalendarDays size={16}/>}/><Metric label="Collected" value={money(ledger.totals.collectedCents)} note={`${ledger.totals.allocatedCents?Math.round(ledger.totals.collectedCents/ledger.totals.allocatedCents*100):0}% of allocated`} icon={<CheckCircle2 size={16}/>}/><Metric label="Outstanding" value={money(ledger.totals.outstandingCents)} note={`${dues.filter(d=>d.remainingCents>0).length} people with dues`} icon={<CircleDollarSign size={16}/>}/></div><div className="dashboard-grid"><section className="panel span-2"><div className="panel-head"><div><h2>Spending over time</h2><p>All recorded months</p></div></div><MonthlyBar data={monthly}/></section><section className="panel"><div className="panel-head"><div><h2>By category</h2><p>All recorded expenses</p></div></div>{cats.length?<CategoryDonut data={cats}/>:<Empty text="No expenses yet."/>}</section><section className="panel span-2"><div className="panel-head"><div><h2>Current dues</h2><p>Allocated shares against recorded payments</p></div><button className="text-btn" onClick={()=>navigate('/dues')}>View all <ArrowUpRight size={14}/></button></div><DuesTable dues={dues.slice(0,6)} ledger={ledger}/></section></div></>}
+ {section==='dues'&&<section className="panel"><div className="panel-head"><div><h2>Current dues</h2><p>Active and inactive balances can be reviewed by administrators.</p></div></div><DuesTable dues={dues} ledger={ledger}/></section>}
+ {section==='balances'&&<section className="panel"><div className="panel-head"><div><h2>Balances</h2><p>Outstanding amounts and credits.</p></div></div><DuesTable dues={ledger.rows.sort((a,b)=>b.remainingCents-a.remainingCents)} ledger={ledger}/></section>}
+ {section==='expenses'&&<section className="panel"><div className="filters"><label className="search-box"><Search size={16}/><input placeholder="Search expenses…" value={query} onChange={e=>setQuery(e.target.value)}/></label><select value={month} onChange={e=>setMonth(e.target.value)}><option value="all">All months</option>{months.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}</select><select value={category} onChange={e=>setCategory(e.target.value)}><option value="all">All categories</option>{data.categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div><div className="table-wrap"><table><thead><tr><th>Date</th><th>Expense</th><th>Category</th><th>Payer</th><th>Amount</th></tr></thead><tbody>{filtered.length?filtered.map(e=><tr key={e.id}><td>{e.date}</td><td><strong>{e.title}</strong><small>{e.description||'—'}{e.dueDate&&new Date(e.dueDate)<new Date()?' · Overdue':''}</small></td><td>{ledger.categoryName(e.categoryId)}</td><td>{ledger.residentName(e.payerId)}</td><td>{money(e.amountCents)}</td></tr>):<tr><td colSpan={5}><Empty text="No expenses match these filters."/></td></tr>}</tbody></table></div></section>}
+ {section==='payments'&&<section className="panel"><div className="table-wrap"><table><thead><tr><th>Date</th><th>Resident</th><th>Amount</th><th>Expense</th><th>Note</th></tr></thead><tbody>{data.payments.length?data.payments.slice().sort((a,b)=>b.date.localeCompare(a.date)).map(p=><tr key={p.id}><td>{p.date}</td><td>{ledger.residentName(p.residentId)}</td><td>{money(p.amountCents)}</td><td>{p.expenseId?data.expenses.find(e=>e.id===p.expenseId)?.title||'—':'—'}</td><td>{p.note||'—'}</td></tr>):<tr><td colSpan={5}><Empty text="No payments recorded."/></td></tr>}</tbody></table></div></section>}
+ {section==='history'&&<section className="panel"><div className="history-grid">{ledger.monthly.map(x=><div className="history-item" key={x.month}><span>{monthLabel(x.month)}</span><strong>{money(x.amount*100)}</strong></div>)}</div></section>}
+ {section==='analytics'&&<div className="dashboard-grid"><section className="panel span-2"><div className="panel-head"><div><h2>Monthly trend</h2><p>Recorded spending</p></div></div><MonthlyBar data={monthly}/></section><section className="panel"><div className="panel-head"><div><h2>Category mix</h2><p>All time</p></div></div><CategoryDonut data={cats}/></section></div>}
+ {section==='reports'&&<section className="panel"><div className="report-grid">{[['monthly','Monthly report'],['yearly','Yearly overview'],['expense','Expense report'],['payment','Payment report'],['outstanding','Outstanding dues'],['resident','Resident report']].map(([key,label])=><div className="report-card" key={key}><FileText size={20}/><h3>{label}</h3><p>Export this dataset in CSV, XLSX or PDF.</p><div className="button-stack"><button className="secondary-btn" onClick={()=>report(key,'csv')}>CSV</button><button className="secondary-btn" onClick={()=>report(key,'xlsx')}>XLSX</button><button className="secondary-btn" onClick={()=>report(key,'pdf')}>PDF</button></div></div>)}</div></section>}
+ </>}
+function DuesTable({dues,ledger}:{dues:ReturnType<typeof buildLedger>["rows"];ledger:ReturnType<typeof buildLedger>}){return <div className="table-wrap"><table><thead><tr><th>Resident</th><th>Flat</th><th>Allocated</th><th>Paid</th><th>Remaining</th><th>Status</th></tr></thead><tbody>{dues.length?dues.map(d=><tr key={d.resident.id}><td><strong>{d.resident.name}</strong></td><td>{ledger.flatNumber(d.resident.flatId)}</td><td>{money(d.owedCents)}</td><td>{money(d.paidCents)}</td><td className={d.remainingCents>0?'danger-text':d.remainingCents<0?'credit-text':''}>{money(d.remainingCents)}</td><td><StatusBadge status={d.status}/></td></tr>):<tr><td colSpan={6}><Empty text="No residents yet."/></td></tr>}</tbody></table></div>}
+function Empty({text}:{text:string}){return <div className="empty">{text}</div>}

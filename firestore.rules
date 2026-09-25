@@ -4,45 +4,32 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function isAdmin() {
       return request.auth != null
-        && request.auth.token.email == "yugrajsekhon20@gmail.com"
+        && request.auth.token.admin == true
         && request.auth.token.email_verified == true;
     }
+    function validDate(v) { return v is string && v.matches('^\\d{4}-\\d{2}-\\d{2}$'); }
+    function validMoney(v) { return v is int && v >= 0; }
 
-    // Public dashboard collections contain only information intended for the read-only ledger.
     match /residents/{id} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
-    match /flats/{id} {
-      allow read: if true;
-      allow write: if isAdmin();
+    match /residentPrivate/{id} {
+      allow read, write: if isAdmin();
     }
-    match /categories/{id} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
+    match /flats/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /categories/{id} { allow read: if true; allow write: if isAdmin(); }
     match /expenses/{id} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAdmin() && validMoney(request.resource.data.amountCents) && validDate(request.resource.data.date);
     }
     match /payments/{id} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAdmin() && validMoney(request.resource.data.amountCents) && validDate(request.resource.data.date);
     }
-    match /recurringExpenses/{id} {
-      allow read: if isAdmin();
-      allow write: if isAdmin();
-    }
-    match /activityLogs/{id} {
-      allow read: if isAdmin();
-      allow write: if isAdmin();
-    }
-    match /settings/{id} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-    match /users/{uid} {
-      allow read, write: if isAdmin() && request.auth.uid == uid;
-    }
+    match /recurringExpenses/{id} { allow read, write: if isAdmin(); }
+    match /activityLogs/{id} { allow read, write: if isAdmin(); }
+    match /settings/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /users/{uid} { allow read, write: if isAdmin() && request.auth.uid == uid; }
   }
 }

@@ -1,13 +1,7 @@
+import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
-import type { ReactNode } from "react";
-export function Modal({ open, title, children, onClose, wide=false }: { open: boolean; title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
-  if (!open) return null;
-  return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`modal ${wide ? "modal-wide" : ""}`}>
-        <div className="modal-head"><div><div className="eyebrow">ParkLedger</div><h2>{title}</h2></div><button className="icon-btn" onClick={onClose} aria-label="Close"><X size={18}/></button></div>
-        {children}
-      </div>
-    </div>
-  );
+export function Modal({open,title,children,onClose,wide=false}:{open:boolean;title:string;children:ReactNode;onClose:()=>void;wide?:boolean}){
+ const ref=useRef<HTMLDivElement>(null); const trigger=useRef<HTMLElement|null>(null);
+ useEffect(()=>{if(!open)return; trigger.current=document.activeElement as HTMLElement; const previous=document.body.style.overflow; document.body.style.overflow="hidden"; const focusables=()=>ref.current?.querySelectorAll<HTMLElement>('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])') ?? []; const onKey=(e:KeyboardEvent)=>{if(e.key==="Escape"){e.preventDefault();onClose();return;} if(e.key!=="Tab")return; const f=[...focusables()]; if(!f.length)return; const first=f[0],last=f[f.length-1]; if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}; document.addEventListener("keydown",onKey); queueMicrotask(()=>focusables()[0]?.focus()); return()=>{document.removeEventListener("keydown",onKey);document.body.style.overflow=previous;trigger.current?.focus();};},[open,onClose]);
+ if(!open)return null; return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><div ref={ref} className={`modal ${wide?"modal-wide":""}`}><div className="modal-head"><div><div className="eyebrow">ParkLedger</div><h2 id="modal-title">{title}</h2></div><button className="icon-btn" onClick={onClose} aria-label="Close"><X size={18}/></button></div>{children}</div></div>;
 }

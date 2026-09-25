@@ -1,167 +1,85 @@
 # ParkLedger
 
-A production-oriented React + TypeScript + Firebase parking/property expense manager.
+ParkLedger is a public, read-only parking/property expense ledger with a protected Google-authenticated admin console.
 
-The supplied HTML was used as the functional starting point. Its public view-only model, remainder-safe split concept, partial-payment concept, CSV export and administrator surface are preserved, but the information architecture and visual system have been rebuilt around a public ledger plus a protected admin console. The original static demo values are not automatically written into Firestore.
+## Architecture
 
-## Stack
+- Public app: `index.html` → `src/main.tsx` → `src/App.tsx` using `BrowserRouter`.
+- Admin app: `admin.html` → `src/admin-main.tsx` → `src/AdminApp.tsx` using `HashRouter` for GitHub Pages.
+- React 19 + Vite + TypeScript + Firebase Auth/Firestore/Storage.
+- Money is integer paise in `amountCents`. Expense splits are integer paise and must sum exactly to `amountCents`.
+- The public app never writes to Firestore.
+- Admin writes are enforced by Firestore/Storage rules using the Firebase custom claim `admin: true` and a verified email.
 
-- React + Vite + TypeScript
-- Firebase Authentication, Firestore and Storage
-- Recharts for responsive analytics
-- Motion-ready React architecture
-- Libraries.dev `border-beam` used selectively on the protected login surface
-- XLSX and jsPDF exports are implemented for Excel-compatible and PDF reports
+## Local development
 
-Libraries.dev documents its React effects as standalone npm packages and recommends selective use of motion that respects reduced-motion preferences. See https://libraries.dev/introduction and https://libraries.dev/how-to-use.
-
-## Run locally
-
-1. Copy `.env.example` to `.env`.
+1. Copy `.env.example` to `.env` and fill the Firebase web configuration.
 2. Run `npm install`.
 3. Run `npm run dev`.
-4. Open the Vite URL.
+4. For a production build, run `npm run build`.
 
-The Firebase web configuration supplied in `.env.example` is client configuration, not a service-account credential. Never put a Firebase service-account JSON, private key or Admin SDK credential in this project.
+Firebase web configuration is not a service-account credential. Never add service-account JSON or private keys to the repository.
 
-## Firebase setup
+## Admin authorization
 
-In Firebase Console:
+The client uses `VITE_ADMIN_EMAIL` only as a UX gate. The security boundary is the Firebase custom claim checked by Firestore and Storage rules.
 
-1. Create/select project `b7auth`.
-2. Enable Authentication > Google.
-3. Add your local and deployed domains under Authentication > Settings > Authorized domains.
-4. Create a Firestore database.
-5. Apply `firestore.rules`.
-6. If receipt uploads are enabled, apply `storage.rules`.
-7. Set the admin email to `yugrajsekhon20@gmail.com` in the environment.
-8. Deploy the Vite `dist` directory to Firebase Hosting, GitHub Pages with an SPA fallback, Vercel, Netlify, or another static host.
-
-## Data model
-
-Top-level collections:
-
-- `residents`
-- `flats`
-- `categories`
-- `expenses`
-- `payments`
-- `recurringExpenses`
-- `activityLogs`
-- `settings/global`
-- `users/{uid}`
-
-Expenses store monetary values as integer paise in `amountCents`. Splits are also integer paise. This avoids floating-point rounding errors.
-
-### Expense shape
+Set the first administrator claim with a trusted Firebase Admin SDK environment, for example from a private script that is **not** committed to this repository:
 
 ```ts
-{
-  title: string,
-  amountCents: number,
-  categoryId: string,
-  payerId: string,
-  date: "YYYY-MM-DD",
-  dueDate?: "YYYY-MM-DD",
-  type: "one-time" | "monthly" | "recurring",
-  recurringId?: string,
-  splitMode: "shares" | "equal" | "custom",
-  split: { [residentId]: number }
-}
+await getAuth().setCustomUserClaims("FIREBASE_UID", { admin: true });
 ```
 
-## Security model
+After setting the claim, the administrator must sign in again or refresh their ID token. The signed-in Google account must also have a verified email.
 
-The public dashboard has no authentication requirement and can only read public collections. The administrator signs in with Google, but client-side email checks are not the security boundary. Firestore rules check the verified Firebase Authentication token email and allow writes only to `yugrajsekhon20@gmail.com`.
+Do not replace the claim check with an email string in `firestore.rules` or `storage.rules`.
 
-`recurringExpenses` and `activityLogs` are admin-only reads because they are operational data and do not need to be public.
+## Public/private resident data
 
-For a stronger production deployment, move sensitive administrative reports or resident contact data into admin-only collections and expose only aggregated/public fields to the dashboard.
+Public `residents/{id}` documents contain only:
 
-## Exact split algorithm
+- `name`
+- `flatId`
+- `shares`
+- `active`
 
-`exactSplit()` works entirely in integer paise. It computes each proportional share, floors the result, then assigns the full remainder to the final participant. Therefore:
+Private resident contact data belongs in `residentPrivate/{id}` and is admin-only. Existing deployments should migrate phone/notes out of public resident documents before relying on the new public read rules.
 
-`sum(split) === expense.amountCents`
+## Ledger calculations
 
-for equal, weighted-share and custom-weight splits.
+`src/lib/ledger.ts` is the single shared domain layer used by public and admin views.
 
-The payer's own share is stored in the same split map as everyone else's. The payer does not get an automatic exemption unless the administrator explicitly chooses a split rule that produces one.
+For each resident:
 
-## Recurring expense duplicate protection
+- `owedCents` = all allocated split shares.
+- `paidCents` = recorded payments plus the payer's own split share for each expense.
+- `remainingCents` = owed minus paid, including negative credits.
+- Status is `clear`, `pending`, `partial`, `paid`, or `credit`.
 
-Monthly generation checks both:
+Totals include outstanding positive balances and credits separately. Charts receive rupee values, not paise.
 
-- `recurringExpense.lastGeneratedMonth`
-- an existing `expense` with the same `recurringId` and target month
+## Split rules
 
-This protects against repeated button presses and stale last-generated metadata.
+`exactSplit()` operates in integer paise. For proportional splits it floors each share and assigns the remainder to the participant with the largest weight. Custom weights that total zero are rejected instead of silently changing to equal shares.
 
-## Backup
+## Dates
 
-- JSON backup preserves the full application structure.
-- TXT export maintains a simple line-oriented legacy format.
-- Restore validates the ParkLedger wrapper and required arrays and asks for confirmation before replacing matching document IDs.
+Local calendar dates use `localISODate()` and `localMonthKey()`. Billing-period calculations use `settings.monthStartDay`, capped to days 1–28.
 
-## Notes
+## Recurring generation
 
-The public dashboard is deliberately view-only. No public UI writes to Firestore. Admin-only actions are routed through the protected console and Firestore rules.
+The normal Generate action creates the current billing period only. Catch-up explicitly creates every missing billing period from `startMonth` through the current period. Generated expense IDs are deterministic as `exp_{recurringId}_{yyyy-mm}` so retries cannot create duplicates.
 
-The source includes the original Firebase project configuration as environment variables only, rather than embedding it in application logic.
+## Reports
 
-## GitHub Pages deployment
+Six distinct reports are available: Monthly, Yearly, Expense, Payment, Outstanding Dues, and Resident. Each exports CSV, XLSX, and paginated PDF. Text cells are sanitized against Excel formula injection.
 
-This repository includes `.github/workflows/deploy.yml`.
+## Backup restore
 
-### 1. Push the project
+Backups are JSON. Restore confirms that matching IDs are replaced while records absent from the backup are kept. Restore uses Firestore batches of at most 400 writes and does not restore `id`, `createdAt`, or `updatedAt` into document bodies.
 
-Create a GitHub repository and push the project to the `main` branch.
+## GitHub Pages
 
-### 2. Add GitHub Actions secrets
+The deploy workflow uses `npm ci`, builds both `index.html` and `admin.html`, and sets `VITE_BASE_PATH` to the repository path. Production sourcemaps are disabled. Public assets are referenced with a base-aware relative path.
 
-Repository → Settings → Secrets and variables → Actions → New repository secret.
-
-Add:
-
-- `VITE_FIREBASE_API_KEY`
-- `VITE_FIREBASE_AUTH_DOMAIN`
-- `VITE_FIREBASE_PROJECT_ID`
-- `VITE_FIREBASE_STORAGE_BUCKET`
-- `VITE_FIREBASE_MESSAGING_SENDER_ID`
-- `VITE_FIREBASE_APP_ID`
-- `VITE_FIREBASE_MEASUREMENT_ID`
-- `VITE_ADMIN_EMAIL`
-
-The Firebase web configuration is intended for client-side use. Never add a Firebase service-account private key.
-
-### 3. Enable GitHub Pages
-
-Repository → Settings → Pages → Build and deployment → Source: **GitHub Actions**.
-
-The workflow automatically builds and publishes `dist/` whenever `main` changes.
-
-### 4. GitHub Pages URL
-
-For a project repository, the normal URL is:
-
-`https://YOUR_USERNAME.github.io/YOUR_REPOSITORY/`
-
-If the repository is a user/organization Pages repository or you use a custom domain, set `VITE_BASE_PATH` appropriately.
-
-### 5. Firebase authorized domains
-
-Firebase Console → Authentication → Settings → Authorized domains.
-
-Add the GitHub Pages hostname used by the deployed app, for example:
-
-`YOUR_USERNAME.github.io`
-
-Google Authentication will otherwise reject the deployed origin.
-
-### 6. Firestore rules
-
-Deploy `firestore.rules` to the Firebase project. Do not weaken the administrator write rule merely to make the frontend work.
-
-### 7. Important GitHub Pages note
-
-The application uses client-side React routing. `public/404.html` is included as a fallback for direct route loads. If your repository is hosted below a path, keep `VITE_BASE_PATH` aligned with that repository path.
+`public/404.html` uses a repository prefix only on `github.io` hostnames, so custom domains and user Pages are not given a false repository prefix.

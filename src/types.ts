@@ -1,6 +1,6 @@
 import type { Timestamp } from "firebase/firestore";
 
-export type PaymentStatus = "pending" | "partial" | "paid";
+export type PaymentStatus = "pending" | "partial" | "paid" | "credit" | "clear";
 export type ExpenseType = "one-time" | "monthly" | "recurring";
 export type ActivityAction =
   | "expense.created" | "expense.updated" | "expense.deleted"

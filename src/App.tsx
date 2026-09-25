@@ -22,7 +22,7 @@ export default function App() {
         <ThemeHost>
           <Routes>
             <Route path="/" element={<PublicRoute section="overview" />} />
-            {["dues", "expenses", "payments", "balances", "history", "analytics", "reports"].map(x => (
+            {["overview", "dues", "expenses", "payments", "balances", "history", "analytics", "reports"].map(x => (
               <Route key={x} path={`/${x}`} element={<PublicRoute section={x} />} />
             ))}
             <Route path="*" element={<Navigate to="/" replace />} />
