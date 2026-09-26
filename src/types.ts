@@ -1,14 +1,14 @@
 import type { Timestamp } from "firebase/firestore";
 
-export type PaymentStatus = "pending" | "partial" | "paid";
+export type PaymentStatus = "pending" | "partial" | "paid" | "credit" | "clear";
 export type ExpenseType = "one-time" | "monthly" | "recurring";
 export type ActivityAction =
   | "expense.created" | "expense.updated" | "expense.deleted"
-  | "payment.recorded" | "resident.created" | "resident.updated"
+  | "payment.recorded" | "payment.updated" | "resident.created" | "resident.updated"
   | "resident.deleted" | "flat.created" | "flat.updated"
   | "category.created" | "category.updated" | "category.deleted"
   | "recurring.created" | "recurring.updated" | "recurring.deleted"
-  | "monthly.generated" | "backup.restored";
+  | "monthly.generated" | "backup.restored" | "contacts.migrated";
 
 export interface Resident {
   id: string;
@@ -19,6 +19,15 @@ export interface Resident {
   active: boolean;
   notes?: string;
   createdAt?: Timestamp | string;
+  updatedAt?: Timestamp | string;
+}
+
+// Admin-only contact fields, stored at residentPrivate/{residentId} per
+// firestore.rules. subscribeAdmin() joins these back onto Resident for the
+// admin UI; residents/{id} (public) should never carry phone/notes again.
+export interface ResidentPrivate {
+  phone?: string;
+  notes?: string;
   updatedAt?: Timestamp | string;
 }
 

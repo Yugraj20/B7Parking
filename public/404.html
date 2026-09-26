@@ -3,8 +3,12 @@
 <head>
   <meta charset="utf-8">
   <script>
-    const path = location.pathname;
-    const base = location.pathname.split("/").slice(0, 2).join("/") + "/";
+    // The base path is substituted at build time (see package.json's
+    // "postbuild" script) from the same VITE_BASE_PATH used for the Vite
+    // build, so this never has to guess a repo name from the URL — which
+    // breaks for custom domains and user/organization GitHub Pages sites
+    // that are served from the root.
+    var base = "__BASE_PATH__";
     sessionStorage.redirect = location.href;
     location.replace(base);
   </script>

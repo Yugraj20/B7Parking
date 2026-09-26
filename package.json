@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "postbuild": "node scripts/inject-404-base.mjs",
     "preview": "vite preview",
     "predeploy": "npm run build"
   },

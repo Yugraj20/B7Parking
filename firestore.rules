@@ -2,16 +2,68 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isAdmin() {
+    // --- Admin model ---------------------------------------------------
+    // Preferred: a Firebase Auth custom claim `admin: true` on the user's
+    // ID token. Fallback #1: an allowlist document at admins/{email}.
+    // Fallback #2: the original hardcoded bootstrap email, kept only so an
+    // existing deployment is not locked out the moment these rules are
+    // applied. Once you have set the custom claim (see README.md, "Admin
+    // access model") remove the isBootstrapAdmin() branch below.
+    function hasAdminClaim() {
+      return request.auth != null && request.auth.token.admin == true;
+    }
+    function isAllowlisted() {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.token.email));
+    }
+    function isBootstrapAdmin() {
+      // TODO(remove after custom claim is set): bootstrap-only fallback.
       return request.auth != null
         && request.auth.token.email == "yugrajsekhon20@gmail.com"
         && request.auth.token.email_verified == true;
     }
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email_verified == true
+        && (hasAdminClaim() || isAllowlisted() || isBootstrapAdmin());
+    }
 
-    // Public dashboard collections contain only information intended for the read-only ledger.
+    // --- Write validation -------------------------------------------------
+    function isIntMoney(v) {
+      return v is int && v >= 0;
+    }
+    function isLocalDate(v) {
+      return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function validExpense(d) {
+      return d.keys().hasAll(['title', 'amountCents', 'categoryId', 'payerId', 'date', 'type', 'splitMode'])
+        && d.title is string && d.title.size() > 0
+        && isIntMoney(d.amountCents)
+        && d.categoryId is string && d.payerId is string
+        && isLocalDate(d.date)
+        && (!('dueDate' in d) || d.dueDate == null || isLocalDate(d.dueDate))
+        && (!('split' in d) || d.split is map);
+    }
+
+    function validPayment(d) {
+      return d.keys().hasAll(['residentId', 'amountCents', 'date'])
+        && d.residentId is string
+        && isIntMoney(d.amountCents)
+        && isLocalDate(d.date);
+    }
+
+    // --- Public dashboard collections -----------------------------------
+    // Only fields the read-only ledger actually needs are public. Resident
+    // contact fields (phone, notes) are intentionally NOT on this document
+    // in the app's write paths going forward — see residentPrivate below.
     match /residents/{id} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+    // Admin-only contact/notes fields, keyed by the same resident id.
+    match /residentPrivate/{id} {
+      allow read, write: if isAdmin();
     }
     match /flats/{id} {
       allow read: if true;
@@ -23,11 +75,13 @@ service cloud.firestore {
     }
     match /expenses/{id} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow create, update: if isAdmin() && validExpense(request.resource.data);
+      allow delete: if isAdmin();
     }
     match /payments/{id} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow create, update: if isAdmin() && validPayment(request.resource.data);
+      allow delete: if isAdmin();
     }
     match /recurringExpenses/{id} {
       allow read: if isAdmin();
@@ -35,11 +89,18 @@ service cloud.firestore {
     }
     match /activityLogs/{id} {
       allow read: if isAdmin();
-      allow write: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false; // audit trail is append-only
     }
     match /settings/{id} {
       allow read: if true;
       allow write: if isAdmin();
+    }
+    match /admins/{email} {
+      // Allowlist documents are managed from the Firebase console / Admin
+      // SDK only — never writable from the client, even by an admin.
+      allow read: if isAdmin();
+      allow write: if false;
     }
     match /users/{uid} {
       allow read, write: if isAdmin() && request.auth.uid == uid;

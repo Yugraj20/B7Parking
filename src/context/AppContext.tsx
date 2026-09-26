@@ -26,25 +26,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => onAuthStateChanged(auth, u => setUser(u)), []);
 
+  const admin = !!user && !!user.email && !!user.emailVerified && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
   useEffect(() => {
     setLoading(true);
     setError(null);
-    const unsub = (user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase())
-      ? subscribeAdmin(setData, e => setError(e.message))
-      : subscribePublic(setData, e => setError(e.message));
-    const timer = window.setTimeout(() => setLoading(false), 450);
-    return () => { unsub(); clearTimeout(timer); };
-  }, [user]);
+    let firstSnapshot = false;
+    const onFirst = () => { if (!firstSnapshot) { firstSnapshot = true; setLoading(false); } };
+    const unsub = admin
+      ? subscribeAdmin(d => { setData(d); onFirst(); }, e => { setError(e.message); onFirst(); })
+      : subscribePublic(d => { setData(d); onFirst(); }, e => { setError(e.message); onFirst(); });
+    return () => unsub();
+  }, [user, admin]);
 
   const value = useMemo<Ctx>(() => ({
     data, loading, error, user,
-    isAdmin: user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase(),
+    isAdmin: admin,
     login: async () => {
       const result = await signInWithPopup(auth, googleProvider);
       return result.user;
     },
     logout: async () => { await signOut(auth); }
-  }), [data, loading, error, user]);
+  }), [data, loading, error, user, admin]);
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
 }
